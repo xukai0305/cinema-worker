@@ -1,7 +1,7 @@
-// ▼ 상영 목록 — 이 파일만 고치면 돼요. 위에서부터 1관, 2관, 3관… 순서로 자동 배정
-// 영상 추가: 아래처럼 한 줄 더하고 저장(Commit)하면 자동 배포
-// ※ 순서를 바꾸면 관 번호도 같이 바뀌어요
+// ▼ 기본 상영 목록 (처음 한 번만 쓰여요)
+// 사이트 하단 '관리'에서 저장한 뒤부터는 관리 화면의 내용이 우선돼요.
+// rows = 행(줄) 수 1~15, cols = 한 줄 좌석 수 1~20
 export const ROOMS = [
-  { title: '콘서트를 즐기는 쉬카이 보기', video: 'https://res.cloudinary.com/dduysrkk7/video/upload/vc_h264,ac_aac,f_mp4/v1792340486/p099zm2lmgxvdhezumac.mp4' },
-  // { title: '두 번째 영화', video: 'https://.../video2.mp4' },
+  { title: '영화 제목을 적어주세요', rows: 11, cols: 12,
+    video: 'https://res.cloudinary.com/dduysrkk7/video/upload/vc_h264,ac_aac,f_mp4/v1792340486/p099zm2lmgxvdhezumac.mp4' },
 ];
