@@ -75,6 +75,7 @@ export class Room {
       players: [...this.c.values()].filter(q => q.seat && q !== p).map(q => this.pub(q)) }));
     sv.addEventListener('message', e => {
       let m; try { m = JSON.parse(e.data); } catch { return; }
+      if (m.t === 'ping') return sv.send('{"t":"pong"}');
       if (m.t === 'seat') {
         const s = String(m.seat), ri = 'ABCDEFGHIJKLMNO'.indexOf(s[0]), n = +s.slice(1);
         if (ri < 0 || ri >= this.rows || !Number.isInteger(n) || n < 1 || n > this.cols || (this.seats[s] && this.seats[s] !== p.id))
