@@ -87,7 +87,7 @@ export class Room {
       } else if (!p.seat) return;
       else if (m.t === 'move') { p.x = +m.x || 0; p.z = +m.z || 0; p.ry = +m.ry || 0; p.sit = !!m.sit; this.bc(this.pub(p), sv); }
       else if (m.t === 'chat') this.bc({ t: 'chat', id: p.id, m: String(m.m).slice(0, 60) });
-      else if (m.t === 'react') this.bc({ t: 'react', id: p.id });
+      else if (m.t === 'react' && ['🐷', '🧡', '💜', '❤️'].includes(m.e)) this.bc({ t: 'react', id: p.id, e: m.e });
     });
     const bye = () => {
       if (!this.c.delete(sv)) return;
