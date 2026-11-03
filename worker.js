@@ -1,9 +1,6 @@
-// 관(영상) 추가: ROOMS에 한 줄만 더하면 됨
+import { ROOMS as LIST } from './rooms.js';
 const EPOCH = Date.UTC(2026, 0, 1);
-const ROOMS = [
-  { id: '797', title: '닉쭈', sub: '닉쭈시네마 797관',
-    video: 'https://res.cloudinary.com/dduysrkk7/video/upload/vc_h264,ac_aac,f_mp4/v1792340486/p099zm2lmgxvdhezumac.mp4' },
-];
+const ROOMS = LIST.map((r, i) => ({ ...r, id: String(i + 1), hall: i + 1 }));
 const H = { 'Access-Control-Allow-Origin': '*', 'content-type': 'application/json' };
 
 export default {
