@@ -60,7 +60,7 @@ export default {
 export class Room {
   constructor(state) { this.st = state.storage; this.c = new Map(); this.seats = {}; this.rows = 11; this.cols = 12; }
   bc(o, ex) { const s = JSON.stringify(o); for (const [w] of this.c) if (w !== ex) try { w.send(s); } catch {} }
-  pub(p) { return { t: 'p', id: p.id, name: p.name, seat: p.seat, x: p.x, z: p.z, ry: p.ry, sit: p.sit }; }
+  pub(p) { return { t: 'p', id: p.id, name: p.name, seat: p.seat, x: p.x, z: p.z, ry: p.ry, sit: p.sit, act: p.act || '' }; }
   async fetch(req) {
     const u = new URL(req.url);
     if (u.pathname === '/cfg') {
@@ -92,6 +92,7 @@ export class Room {
       else if (m.t === 'move') { p.x = +m.x || 0; p.z = +m.z || 0; p.ry = +m.ry || 0; p.sit = !!m.sit; this.bc(this.pub(p), sv); }
       else if (m.t === 'chat') this.bc({ t: 'chat', id: p.id, m: String(m.m).slice(0, 60) });
       else if (m.t === 'react' && ['🐷', '🧡', '💜', '❤️'].includes(m.e)) this.bc({ t: 'react', id: p.id, e: m.e });
+      else if (m.t === 'act') { p.act = ['lo', 'lp', 'pc', 'sq'].includes(m.a) ? m.a : ''; this.bc(this.pub(p), sv); }
     });
     const bye = () => {
       if (!this.c.delete(sv)) return;
