@@ -13,14 +13,15 @@ function clean(list) {
       rows: clamp(l.rows, 1, 15, 11), cols: clamp(l.cols, 1, 20, 12),
       startAt: Math.max(0, Math.round(+l.startAt) || 0), dur: clamp(l.dur, 0, 86400, 0),
       repeat: [1, 7].includes(+l.repeat) ? +l.repeat : 0,
-      poster: /^https?:\/\//.test(l.poster || '') ? String(l.poster).slice(0, 500) : '' });
+      poster: /^https?:\/\//.test(l.poster || '') ? String(l.poster).slice(0, 500) : '',
+      code: String(l.code || '').trim().slice(0, 20) });
   }
   return out;
 }
 const cfg = env => env.ROOM.get(env.ROOM.idFromName('__cfg'));
 async function getRooms(env) {
   try { const s = await (await cfg(env).fetch('https://do/cfg')).json(); if (Array.isArray(s)) return s; } catch {}
-  return DEFAULT.map((r, i) => ({ ...r, id: String(i + 1), rows: r.rows || 11, cols: r.cols || 12, startAt: r.startAt || 0, dur: r.dur || 0, repeat: r.repeat || 0, poster: r.poster || '' }));
+  return DEFAULT.map((r, i) => ({ ...r, id: String(i + 1), rows: r.rows || 11, cols: r.cols || 12, startAt: r.startAt || 0, dur: r.dur || 0, repeat: r.repeat || 0, poster: r.poster || '', code: r.code || '' }));
 }
 
 export default {
@@ -31,14 +32,21 @@ export default {
       const rooms = await Promise.all((await getRooms(env)).map(async (r, i) => {
         let n = 0;
         try { n = (await (await env.ROOM.get(env.ROOM.idFromName(r.id)).fetch('https://do/count')).json()).n; } catch {}
-        return { ...r, hall: i + 1, n };
+        const { code, ...pub } = r;
+        return { ...pub, video: code ? '' : r.video, priv: !!code, hall: i + 1, n };
       }));
       return J({ epoch: EPOCH, rooms });
+    }
+    if (u.pathname === '/api/join' && req.method === 'POST') {
+      const b = await req.json().catch(() => ({})), r = (await getRooms(env)).find(x => x.id === b.id);
+      if (!r) return J({ ok: false, err: '없는 상영관이에요' }, 404);
+      if (r.code && String(b.code || '') !== r.code) return J({ ok: false, err: '상영 코드가 맞지 않아요' }, 403);
+      return J({ ok: true, video: r.video });
     }
     if (u.pathname.startsWith('/api/admin/')) {
       if (!env.ADMIN_PW) return J({ ok: false, err: 'ADMIN_PW 비밀번호가 서버에 설정되지 않았어요' });
       if (req.headers.get('x-admin') !== env.ADMIN_PW) return J({ ok: false, err: '비밀번호가 맞지 않아요' }, 401);
-      if (u.pathname === '/api/admin/check') return J({ ok: true });
+      if (u.pathname === '/api/admin/check') return J({ ok: true, rooms: await getRooms(env) });
       if (u.pathname === '/api/admin/rooms' && req.method === 'POST') {
         const list = clean(await req.json().catch(() => []));
         await cfg(env).fetch('https://do/cfg', { method: 'POST', body: JSON.stringify(list) });
@@ -49,6 +57,7 @@ export default {
     if (m) {
       const r = (await getRooms(env)).find(x => x.id === m[1]);
       if (r) {
+        if (r.code && u.searchParams.get('k') !== r.code) return new Response('forbidden', { status: 403 });
         u.searchParams.set('r', r.rows); u.searchParams.set('c', r.cols);
         return env.ROOM.get(env.ROOM.idFromName(r.id)).fetch(new Request(u, req));
       }
