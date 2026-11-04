@@ -11,14 +11,15 @@ function clean(list) {
     seen.add(id);
     out.push({ id, title: String(l.title || '제목 없음').slice(0, 40), video: String(l.video || '').slice(0, 500),
       rows: clamp(l.rows, 1, 15, 11), cols: clamp(l.cols, 1, 20, 12),
-      startAt: Math.max(0, Math.round(+l.startAt) || 0), dur: clamp(l.dur, 0, 86400, 0) });
+      startAt: Math.max(0, Math.round(+l.startAt) || 0), dur: clamp(l.dur, 0, 86400, 0),
+      repeat: [1, 7].includes(+l.repeat) ? +l.repeat : 0 });
   }
   return out;
 }
 const cfg = env => env.ROOM.get(env.ROOM.idFromName('__cfg'));
 async function getRooms(env) {
   try { const s = await (await cfg(env).fetch('https://do/cfg')).json(); if (Array.isArray(s)) return s; } catch {}
-  return DEFAULT.map((r, i) => ({ ...r, id: String(i + 1), rows: r.rows || 11, cols: r.cols || 12, startAt: r.startAt || 0, dur: r.dur || 0 }));
+  return DEFAULT.map((r, i) => ({ ...r, id: String(i + 1), rows: r.rows || 11, cols: r.cols || 12, startAt: r.startAt || 0, dur: r.dur || 0, repeat: r.repeat || 0 }));
 }
 
 export default {
