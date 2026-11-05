@@ -1,7 +1,7 @@
 import { ROOMS as DEFAULT } from './rooms.js';
 const EPOCH = Date.UTC(2026, 0, 1);
 const H = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'content-type,x-admin',
-  'Access-Control-Allow-Methods': 'GET,POST,PUT,OPTIONS', 'content-type': 'application/json' };
+  'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'content-type': 'application/json' };
 const J = (o, s = 200) => new Response(JSON.stringify(o), { status: s, headers: H });
 const clamp = (v, a, b, d) => Math.max(a, Math.min(b, Math.round(+v) || d));
 function clean(list) {
@@ -28,22 +28,6 @@ export default {
   async fetch(req, env) {
     const u = new URL(req.url);
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: H });
-    if (u.pathname.startsWith('/media/')) {
-      const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'Content-Range,Accept-Ranges,Content-Length' };
-      if (!env.MEDIA) return new Response('R2 not configured', { status: 500, headers: CORS });
-      const key = decodeURIComponent(u.pathname.slice(7));
-      if (!/^[pv]\/[\w.\-]+$/.test(key)) return new Response('bad key', { status: 400, headers: CORS });
-      const obj = await env.MEDIA.get(key, { range: req.headers });
-      if (!obj) return new Response('not found', { status: 404, headers: CORS });
-      const hd = new Headers(CORS);
-      obj.writeHttpMetadata(hd); hd.set('etag', obj.httpEtag); hd.set('Accept-Ranges', 'bytes'); hd.set('Cache-Control', 'public, max-age=31536000, immutable');
-      let st = 200;
-      if (obj.range) {
-        const r = obj.range, off = r.offset ?? (r.suffix !== undefined ? obj.size - r.suffix : 0), len = r.length ?? (obj.size - off);
-        hd.set('Content-Range', `bytes ${off}-${off + len - 1}/${obj.size}`); hd.set('Content-Length', String(len)); st = 206;
-      } else hd.set('Content-Length', String(obj.size));
-      return new Response(req.method === 'HEAD' ? null : obj.body, { status: st, headers: hd });
-    }
     if (u.pathname === '/api/rooms') {
       const rooms = await Promise.all((await getRooms(env)).map(async (r, i) => {
         let n = 0;
@@ -63,38 +47,6 @@ export default {
       if (!env.ADMIN_PW) return J({ ok: false, err: 'ADMIN_PW 비밀번호가 서버에 설정되지 않았어요' });
       if (req.headers.get('x-admin') !== env.ADMIN_PW) return J({ ok: false, err: '비밀번호가 맞지 않아요' }, 401);
       if (u.pathname === '/api/admin/check') return J({ ok: true, rooms: await getRooms(env) });
-      if (u.pathname.startsWith('/api/admin/up/')) {
-        if (!env.MEDIA) return J({ ok: false, err: 'R2 저장소(MEDIA)가 연결돼 있지 않아요' });
-        const op = u.pathname.slice(14), q = u.searchParams, kind = q.get('kind') === 'image' ? 'image' : 'video';
-        const ct = q.get('type') || (kind === 'image' ? 'image/jpeg' : 'video/mp4');
-        if (!ct.startsWith(kind + '/')) return J({ ok: false, err: kind === 'image' ? '이미지 파일만 올릴 수 있어요' : '영상 파일만 올릴 수 있어요' });
-        const mk = () => (kind === 'image' ? 'p/' : 'v/') + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4) + '-' +
-          (q.get('name') || 'file').toLowerCase().replace(/[^a-z0-9._-]/g, '-').replace(/-+/g, '-').slice(-40);
-        const okKey = k => /^[pv]\/[\w.\-]+$/.test(k || '');
-        if (op === 'one' && req.method === 'PUT') {
-          const buf = await req.arrayBuffer();
-          if (buf.byteLength > 26214400) return J({ ok: false, err: '25MB 이하만 한 번에 올릴 수 있어요' });
-          const key = mk(); await env.MEDIA.put(key, buf, { httpMetadata: { contentType: ct } });
-          return J({ ok: true, key });
-        }
-        if (op === 'start' && req.method === 'POST') {
-          const key = mk(), mp = await env.MEDIA.createMultipartUpload(key, { httpMetadata: { contentType: ct } });
-          return J({ ok: true, key, uploadId: mp.uploadId });
-        }
-        if (op === 'part' && req.method === 'PUT') {
-          const key = q.get('key'), id = q.get('id'), n = +q.get('n');
-          if (!okKey(key) || !id || !(n >= 1 && n <= 10000)) return J({ ok: false, err: '잘못된 요청이에요' }, 400);
-          const part = await env.MEDIA.resumeMultipartUpload(key, id).uploadPart(n, await req.arrayBuffer());
-          return J({ ok: true, part: { partNumber: part.partNumber, etag: part.etag } });
-        }
-        if (op === 'done' && req.method === 'POST') {
-          const b = await req.json().catch(() => ({}));
-          if (!okKey(b.key) || !b.uploadId || !Array.isArray(b.parts)) return J({ ok: false, err: '잘못된 요청이에요' }, 400);
-          await env.MEDIA.resumeMultipartUpload(b.key, b.uploadId).complete(b.parts);
-          return J({ ok: true, key: b.key });
-        }
-        return J({ ok: false, err: '없는 요청이에요' }, 404);
-      }
       if (u.pathname === '/api/admin/rooms' && req.method === 'POST') {
         const list = clean(await req.json().catch(() => []));
         await cfg(env).fetch('https://do/cfg', { method: 'POST', body: JSON.stringify(list) });
