@@ -111,10 +111,12 @@ export default {
   },
 };
 
+const lk = o => ({ c: Number.isInteger(o && o.c) && o.c >= 0 && o.c < 5 ? o.c : -1, h: Number.isInteger(o && o.h) && o.h >= 0 && o.h < 3 ? o.h : 0 });
+
 export class Room {
   constructor(state) { this.st = state.storage; this.c = new Map(); this.seats = {}; this.rows = 11; this.cols = 12; }
   bc(o, ex) { const s = JSON.stringify(o); for (const [w] of this.c) if (w !== ex) try { w.send(s); } catch {} }
-  pub(p) { return { t: 'p', id: p.id, name: p.name, seat: p.seat, x: p.x, z: p.z, ry: p.ry, sit: p.sit, act: p.act || '' }; }
+  pub(p) { return { t: 'p', id: p.id, name: p.name, seat: p.seat, x: p.x, z: p.z, ry: p.ry, sit: p.sit, act: p.act || '', look: p.look || null }; }
   async fetch(req) {
     const u = new URL(req.url);
     if (u.pathname === '/cfg') {
@@ -138,7 +140,7 @@ export class Room {
         if (ri < 0 || ri >= this.rows || !Number.isInteger(n) || n < 1 || n > this.cols || (this.seats[s] && this.seats[s] !== p.id))
           return sv.send(JSON.stringify({ t: 'seat_fail' }));
         if (p.seat) delete this.seats[p.seat];
-        p.seat = s; p.sit = true; p.name = String(m.name || '관객').slice(0, 20); this.seats[s] = p.id;
+        p.seat = s; p.sit = true; p.look = lk(m.look); p.name = String(m.name || '관객').slice(0, 20); this.seats[s] = p.id;
         sv.send(JSON.stringify({ t: 'seat_ok', seat: s }));
         this.bc({ t: 'seats', seats: this.seats });
         this.bc(this.pub(p), sv);
@@ -146,6 +148,7 @@ export class Room {
       else if (m.t === 'move') { p.x = +m.x || 0; p.z = +m.z || 0; p.ry = +m.ry || 0; p.sit = !!m.sit; this.bc(this.pub(p), sv); }
       else if (m.t === 'chat') this.bc({ t: 'chat', id: p.id, m: String(m.m).slice(0, 60) });
       else if (m.t === 'react' && ['🐷', '🧡', '💜', '❤️'].includes(m.e)) this.bc({ t: 'react', id: p.id, e: m.e });
+      else if (m.t === 'look') { p.look = lk(m); this.bc(this.pub(p), sv); }
       else if (m.t === 'act') { p.act = ['lo', 'lp', 'pc', 'sq'].includes(m.a) ? m.a : ''; this.bc(this.pub(p), sv); }
     });
     const bye = () => {
