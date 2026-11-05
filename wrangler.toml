@@ -9,3 +9,8 @@ class_name = "Room"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Room"]
+
+# 영상·포스터 저장소 (R2). 대시보드에서 같은 이름의 버킷을 먼저 만들어야 해요.
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "cinema-media"
