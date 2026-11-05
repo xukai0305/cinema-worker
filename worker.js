@@ -1,6 +1,6 @@
 import { ROOMS as DEFAULT } from './rooms.js';
 const EPOCH = Date.UTC(2026, 0, 1);
-const H = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'content-type,x-admin',
+const H = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'content-type,x-admin,range',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'content-type': 'application/json' };
 const J = (o, s = 200) => new Response(JSON.stringify(o), { status: s, headers: H });
 const clamp = (v, a, b, d) => Math.max(a, Math.min(b, Math.round(+v) || d));
@@ -27,10 +27,52 @@ async function getRooms(env) {
   return DEFAULT.map((r, i) => ({ ...r, id: String(i + 1), rows: r.rows || 11, cols: r.cols || 12, startAt: r.startAt || 0, dur: r.dur || 0, repeat: r.repeat || 0, poster: r.poster || '', code: r.code || '', videos: r.videos || (r.video ? [r.video] : []), durs: r.durs || [], loop: !!r.loop }));
 }
 
+const sign = async (env, url) => {
+  const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.ADMIN_PW || 'x'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const b = new Uint8Array(await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(url)));
+  return [...b.slice(0, 12)].map(x => x.toString(16).padStart(2, '0')).join('');
+};
+// 영상 프록시: CORS·Referer(핫링크) 때문에 직접 재생이 안 되는 영상을 서버가 대신 받아서 전달해요
+async function proxy(req, env, u) {
+  let t; try { t = new URL(u.searchParams.get('u') || ''); } catch { return new Response('bad url', { status: 400, headers: H }); }
+  if (!/^https?:$/.test(t.protocol)) return new Response('bad url', { status: 400, headers: H });
+  const sig = u.searchParams.get('s') || '';
+  let ok = sig && sig === await sign(env, t.href);
+  if (!ok) {
+    for (const r of await getRooms(env)) for (const v of (r.videos && r.videos.length ? r.videos : [r.video])) { try { if (new URL(v).host === t.host) ok = true; } catch {} }
+  }
+  if (!ok) return new Response('forbidden', { status: 403, headers: H });
+  const h = new Headers({ 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36' });
+  if (req.headers.get('range')) h.set('range', req.headers.get('range'));
+  const res = await fetch(t.href, { headers: h, redirect: 'follow' });
+  const ct = res.headers.get('content-type') || '';
+  if (/mpegurl/i.test(ct) || /\.m3u8$/i.test(t.pathname)) {
+    const base = res.url || t.href, self = u.origin + '/api/proxy?u=';
+    const wrap = async x => { const a = new URL(x, base).href; return self + encodeURIComponent(a) + '&s=' + await sign(env, a); };
+    const lines = (await res.text()).split('\n'), out = [];
+    for (const ln of lines) {
+      const l = ln.trim();
+      if (!l) out.push(ln);
+      else if (l.startsWith('#')) {
+        const m = [...l.matchAll(/URI="([^"]+)"/g)]; let r = l;
+        for (const x of m) r = r.replace(x[0], 'URI="' + await wrap(x[1]) + '"');
+        out.push(r);
+      } else out.push(await wrap(l));
+    }
+    return new Response(out.join('\n'), { status: res.status, headers: { ...H, 'content-type': 'application/vnd.apple.mpegurl', 'cache-control': 'no-store' } });
+  }
+  const oh = new Headers(res.headers);
+  oh.delete('set-cookie'); oh.set('Access-Control-Allow-Origin', '*');
+  oh.set('Access-Control-Expose-Headers', 'content-length,content-range,accept-ranges');
+  oh.set('Cross-Origin-Resource-Policy', 'cross-origin');
+  return new Response(res.body, { status: res.status, headers: oh });
+}
+
 export default {
   async fetch(req, env) {
     const u = new URL(req.url);
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: H });
+    if (u.pathname === '/api/proxy' && req.method === 'GET') return proxy(req, env, u);
     if (u.pathname === '/api/rooms') {
       const rooms = await Promise.all((await getRooms(env)).map(async (r, i) => {
         let n = 0;
