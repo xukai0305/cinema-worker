@@ -9,13 +9,20 @@ function clean(list) {
   for (const l of (Array.isArray(list) ? list : []).slice(0, 20)) {
     const id = /^\w{1,12}$/.test(l.id || '') && !seen.has(l.id) ? l.id : Math.random().toString(36).slice(2, 8);
     seen.add(id);
-    const vs = (Array.isArray(l.videos) && l.videos.length ? l.videos : [l.video]).map(x => String(x || '').trim().slice(0, 500)).filter(Boolean).slice(0, 30);
+    const rv = Array.isArray(l.videos) && l.videos.length ? l.videos : [l.video], rt = Array.isArray(l.vt) ? l.vt : [];
+    const pr = rv.map((x, i) => [String(x || '').trim().slice(0, 500), String(rt[i] || '').slice(0, 40)]).filter(p => p[0]).slice(0, 30);
+    const vs = pr.map(p => p[0]), vt = pr.map(p => p[1]);
     const pst = String(l.poster || '');
-    out.push({ id, title: String(l.title || '제목 없음').slice(0, 40), video: vs[0] || '', videos: vs,
+    const url = x => /^https?:\/\//.test(String(x || '')) ? String(x).slice(0, 500) : '';
+    out.push({ id, title: String(l.title || '제목 없음').slice(0, 40), video: vs[0] || '', videos: vs, vt,
+      theme: ['cinema', 'cafe', 'dvd'].includes(l.theme) ? l.theme : 'cinema',
+      banner: String(l.banner || '').slice(0, 40), notice: String(l.notice || '').slice(0, 60), waitImg: url(l.waitImg),
+      photos: (Array.isArray(l.photos) ? l.photos : []).map(url).filter(Boolean).slice(0, 12),
+      goods: (Array.isArray(l.goods) ? l.goods : []).map(g => ({ n: String((g && g.n) || '').slice(0, 30), u: url(g && g.u) })).filter(g => g.u).slice(0, 12),
       durs: Array.isArray(l.durs) && l.durs.length === vs.length ? l.durs.map(x => clamp(x, 0, 86400, 0)) : [], loop: !!l.loop,
       rows: clamp(l.rows, 1, 15, 11), cols: clamp(l.cols, 1, 20, 12),
       startAt: Math.max(0, Math.round(+l.startAt) || 0), dur: clamp(l.dur, 0, 86400, 0),
-      repeat: [1, 7].includes(+l.repeat) ? +l.repeat : 0,
+      repeat: [1, 7, -1].includes(+l.repeat) ? +l.repeat : 0,
       poster: /^https?:\/\//.test(pst) ? pst.slice(0, 500) : (/^data:image\/(jpeg|png|webp);base64,[\w+\/=]+$/.test(pst) && pst.length <= 60000 ? pst : ''),
       code: String(l.code || '').trim().slice(0, 20) });
   }
@@ -24,7 +31,7 @@ function clean(list) {
 const cfg = env => env.ROOM.get(env.ROOM.idFromName('__cfg'));
 async function getRooms(env) {
   try { const s = await (await cfg(env).fetch('https://do/cfg')).json(); if (Array.isArray(s)) return s; } catch {}
-  return DEFAULT.map((r, i) => ({ ...r, id: String(i + 1), rows: r.rows || 11, cols: r.cols || 12, startAt: r.startAt || 0, dur: r.dur || 0, repeat: r.repeat || 0, poster: r.poster || '', code: r.code || '', videos: r.videos || (r.video ? [r.video] : []), durs: r.durs || [], loop: !!r.loop }));
+  return DEFAULT.map((r, i) => ({ ...r, id: String(i + 1), rows: r.rows || 11, cols: r.cols || 12, startAt: r.startAt || 0, dur: r.dur || 0, repeat: r.repeat || 0, poster: r.poster || '', code: r.code || '', videos: r.videos || (r.video ? [r.video] : []), durs: r.durs || [], loop: !!r.loop, vt: r.vt || [], theme: r.theme || 'cinema', banner: r.banner || '', notice: r.notice || '', waitImg: r.waitImg || '', photos: r.photos || [], goods: r.goods || [] }));
 }
 
 const sign = async (env, url) => {
@@ -78,7 +85,7 @@ export default {
         let n = 0;
         try { n = (await (await env.ROOM.get(env.ROOM.idFromName(r.id)).fetch('https://do/count')).json()).n; } catch {}
         const { code, ...pub } = r;
-        return { ...pub, video: code ? '' : r.video, videos: code ? [] : (r.videos && r.videos.length ? r.videos : (r.video ? [r.video] : [])), priv: !!code, hall: i + 1, n };
+        return { ...pub, video: code ? '' : r.video, videos: code ? [] : (r.videos && r.videos.length ? r.videos : (r.video ? [r.video] : [])), vt: code ? [] : (r.vt || []), goods: code ? [] : (r.goods || []), photos: code ? [] : (r.photos || []), priv: !!code, hall: i + 1, n };
       }));
       return J({ epoch: EPOCH, rooms });
     }
@@ -86,7 +93,7 @@ export default {
       const b = await req.json().catch(() => ({})), r = (await getRooms(env)).find(x => x.id === b.id);
       if (!r) return J({ ok: false, err: '없는 상영관이에요' }, 404);
       if (r.code && String(b.code || '') !== r.code) return J({ ok: false, err: '상영 코드가 맞지 않아요' }, 403);
-      return J({ ok: true, video: r.video, videos: r.videos && r.videos.length ? r.videos : (r.video ? [r.video] : []) });
+      return J({ ok: true, video: r.video, videos: r.videos && r.videos.length ? r.videos : (r.video ? [r.video] : []), vt: r.vt || [], goods: r.goods || [], photos: r.photos || [] });
     }
     if (u.pathname.startsWith('/api/admin/')) {
       if (!env.ADMIN_PW) return J({ ok: false, err: 'ADMIN_PW 비밀번호가 서버에 설정되지 않았어요' });
