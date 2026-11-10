@@ -118,6 +118,14 @@ export default {
     }
     if (u.pathname === '/api/guest') {
       const st = cfg(env);
+      try { // 예전 방별 방명록을 전체 방명록으로 한 번 합치기
+        const f = await (await st.fetch('https://do/guest?flag=1')).json();
+        if (!f.done) {
+          const all = [];
+          for (const r of await getRooms(env)) { try { const j = await (await env.ROOM.get(env.ROOM.idFromName(r.id)).fetch('https://do/guest?raw=1')).json(); all.push(...(j.all || [])); } catch {} }
+          await st.fetch('https://do/guest', { method: 'PUT', body: JSON.stringify(all) });
+        }
+      } catch {}
       const rr = req.method === 'POST'
         ? await st.fetch('https://do/guest', { method: 'POST', body: JSON.stringify({ ...(await req.json().catch(() => ({}))), ip: req.headers.get('cf-connecting-ip') || '' }) })
         : await st.fetch('https://do/guest?p=' + encodeURIComponent(u.searchParams.get('p') || '0'));
@@ -183,6 +191,13 @@ export class Room {
     }
     if (u.pathname === '/guest') {
       let g = (await this.st.get('gb')) || [];
+      if (u.searchParams.get('flag')) return Response.json({ done: !!(await this.st.get('gbm')) });
+      if (u.searchParams.get('raw')) return Response.json({ all: g });
+      if (req.method === 'PUT') {
+        const a = await req.json().catch(() => []);
+        const m = [...g, ...(Array.isArray(a) ? a : [])].filter(x => x && x.t).sort((p, q) => (q.ts || 0) - (p.ts || 0)).slice(0, 300);
+        await this.st.put('gb', m); await this.st.put('gbm', 1); return Response.json({ ok: true });
+      }
       if (req.method === 'POST') {
         const b = await req.json().catch(() => ({})), t = String(b.t || '').replace(/\s+/g, ' ').trim().slice(0, 60);
         if (!t) return Response.json({ ok: false }, { status: 400 });
