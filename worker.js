@@ -13,7 +13,7 @@ function clean(list) {
     const pr = rv.map((x, i) => [String(x || '').trim().slice(0, 500), String(rt[i] || '').slice(0, 40)]).filter(p => p[0]).slice(0, 30);
     const vs = pr.map(p => p[0]), vt = pr.map(p => p[1]);
     const pst = String(l.poster || '');
-    const th0 = ['cinema', 'cafe', 'dvd'].includes(l.theme) ? l.theme : 'cinema';
+    const th0 = ['cinema', 'dvd'].includes(l.theme) ? l.theme : 'cinema';
     const url = x => /^https?:\/\//.test(String(x || '')) ? String(x).slice(0, 500) : '';
     out.push({ id, title: String(l.title || '제목 없음').slice(0, 40), video: vs[0] || '', videos: vs, vt,
       theme: th0, xb: (Array.isArray(l.xb) ? l.xb : []).map(url).filter(Boolean).slice(0, 2), bigBanner: url(l.bigBanner), roseText: String(l.roseText || '').slice(0, 24),
@@ -33,7 +33,7 @@ function clean(list) {
 let RC = { t: 0, v: null };
 const cfg = env => env.ROOM.get(env.ROOM.idFromName('__cfg'));
 async function getRooms(env) {
-  try { const s = await (await cfg(env).fetch('https://do/cfg')).json(); if (Array.isArray(s)) return s.map(r => ['cinema', 'cafe', 'dvd'].includes(r.theme) ? r : { ...r, theme: 'cinema' }); } catch {}
+  try { const s = await (await cfg(env).fetch('https://do/cfg')).json(); if (Array.isArray(s)) return s.map(r => ['cinema', 'dvd'].includes(r.theme) ? r : { ...r, theme: 'cinema' }); } catch {}
   return DEFAULT.map((r, i) => ({ ...r, id: String(i + 1), rows: r.rows || 11, cols: r.cols || 12, startAt: r.startAt || 0, dur: r.dur || 0, repeat: r.repeat || 0, poster: r.poster || '', code: r.code || '', videos: r.videos || (r.video ? [r.video] : []), durs: r.durs || [], loop: !!r.loop, vt: r.vt || [], theme: r.theme || 'cinema', banner: r.banner || '', notice: r.notice || '', waitImg: r.waitImg || '', photos: r.photos || [], goods: r.goods || [], xb: r.xb || [], bigBanner: r.bigBanner || '', roseText: r.roseText || '' }));
 }
 
