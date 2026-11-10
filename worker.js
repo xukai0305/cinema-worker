@@ -1,6 +1,6 @@
 import { ROOMS as DEFAULT } from './rooms.js';
 const EPOCH = Date.UTC(2026, 0, 1);
-const H = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'content-type,x-admin,range,x-room-code',
+const H = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'content-type,x-admin,range',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'content-type': 'application/json' };
 const J = (o, s = 200) => new Response(JSON.stringify(o), { status: s, headers: H });
 const clamp = (v, a, b, d) => Math.max(a, Math.min(b, Math.round(+v) || d));
@@ -13,7 +13,7 @@ function clean(list) {
     const pr = rv.map((x, i) => [String(x || '').trim().slice(0, 500), String(rt[i] || '').slice(0, 40)]).filter(p => p[0]).slice(0, 30);
     const vs = pr.map(p => p[0]), vt = pr.map(p => p[1]);
     const pst = String(l.poster || '');
-    const th0 = ['cinema', 'dvd', 'birthday_cafe'].includes(l.theme) ? l.theme : 'cinema';
+    const th0 = ['cinema', 'dvd'].includes(l.theme) ? l.theme : 'cinema';
     const url = x => /^https?:\/\//.test(String(x || '')) ? String(x).slice(0, 500) : '';
     out.push({ id, title: String(l.title || '제목 없음').slice(0, 40), video: vs[0] || '', videos: vs, vt,
       theme: th0, xb: (Array.isArray(l.xb) ? l.xb : []).map(url).filter(Boolean).slice(0, 2), bigBanner: url(l.bigBanner), roseText: String(l.roseText || '').slice(0, 24),
@@ -21,7 +21,7 @@ function clean(list) {
       photos: (Array.isArray(l.photos) ? l.photos : []).map(url).filter(Boolean).slice(0, th0 === 'dvd' ? 18 : 10),
       goods: (Array.isArray(l.goods) ? l.goods : []).map(g => ({ n: String((g && g.n) || '').slice(0, 30), u: url(g && g.u) })).filter(g => g.u).slice(0, 12),
       durs: Array.isArray(l.durs) && l.durs.length === vs.length ? l.durs.map(x => clamp(x, 0, 86400, 0)) : [], loop: !!l.loop,
-      rows: th0 === 'birthday_cafe' ? 4 : th0 === 'dvd' ? 1 : th0 === 'cafe' ? clamp(l.rows, 1, 5, 3) : clamp(l.rows, 1, 15, 11), cols: th0 === 'birthday_cafe' ? 5 : th0 === 'dvd' ? 5 : th0 === 'cafe' ? clamp(l.cols, 1, 8, 4) : clamp(l.cols, 1, 20, 12),
+      rows: th0 === 'dvd' ? 1 : th0 === 'cafe' ? clamp(l.rows, 1, 5, 3) : clamp(l.rows, 1, 15, 11), cols: th0 === 'dvd' ? 5 : th0 === 'cafe' ? clamp(l.cols, 1, 8, 4) : clamp(l.cols, 1, 20, 12),
       cpType: ['link', 'code'].includes(l.cpType) ? l.cpType : '', cpValue: String(l.cpValue || '').slice(0, 300), cpLabel: String(l.cpLabel || '').slice(0, 30), egg: !!l.egg,
       startAt: Math.max(0, Math.round(+l.startAt) || 0), dur: clamp(l.dur, 0, 86400, 0),
       repeat: [1, 7, -1].includes(+l.repeat) ? +l.repeat : 0,
@@ -33,7 +33,7 @@ function clean(list) {
 let RC = { t: 0, v: null };
 const cfg = env => env.ROOM.get(env.ROOM.idFromName('__cfg'));
 async function getRooms(env) {
-  try { const s = await (await cfg(env).fetch('https://do/cfg')).json(); if (Array.isArray(s)) return s.map(r => ['cinema', 'dvd', 'birthday_cafe'].includes(r.theme) ? (r.theme==='birthday_cafe'?{...r,rows:4,cols:5}:r) : { ...r, theme: 'cinema' }); } catch {}
+  try { const s = await (await cfg(env).fetch('https://do/cfg')).json(); if (Array.isArray(s)) return s.map(r => ['cinema', 'dvd'].includes(r.theme) ? r : { ...r, theme: 'cinema' }); } catch {}
   return DEFAULT.map((r, i) => ({ ...r, id: String(i + 1), rows: r.rows || 11, cols: r.cols || 12, startAt: r.startAt || 0, dur: r.dur || 0, repeat: r.repeat || 0, poster: r.poster || '', code: r.code || '', videos: r.videos || (r.video ? [r.video] : []), durs: r.durs || [], loop: !!r.loop, vt: r.vt || [], theme: r.theme || 'cinema', banner: r.banner || '', notice: r.notice || '', waitImg: r.waitImg || '', photos: r.photos || [], goods: r.goods || [], xb: r.xb || [], bigBanner: r.bigBanner || '', roseText: r.roseText || '' }));
 }
 
@@ -82,24 +82,6 @@ export default {
   async fetch(req, env, ctx) {
     const u = new URL(req.url);
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: H });
-    const gb = u.pathname.match(/^\/api\/(admin\/)?guestbook\/(\w{1,12})$/);
-    if (gb) {
-      const r = (await getRooms(env)).find(r => r.id === gb[2]);
-      if (!r) return J({err:'없는 방입니다'},404);
-      if (gb[1]) {
-        if (!env.ADMIN_PW || req.headers.get('x-admin') !== env.ADMIN_PW) return J({err:'관리자 인증이 필요합니다'},401);
-        if(req.method !== 'POST') return J({err:'method'},405);
-        return env.ROOM.get(env.ROOM.idFromName(r.id)).fetch('https://do/guestbook/delete', {method:'POST',body:await req.text()});
-      }
-      if(r.code && req.headers.get('x-room-code') !== r.code) return J({err:'상영 코드가 필요합니다'},403);
-      if(!['GET','POST'].includes(req.method)) return J({err:'method'},405);
-      if(+req.headers.get('content-length')>4096) return J({err:'too large'},413);
-      const body = req.method==='POST' ? await req.text() : undefined;
-      if(body && body.length>4096) return J({err:'too large'},413);
-      const ip = req.headers.get('CF-Connecting-IP') || 'local';
-      const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(r.id+':'+ip)))].map(x=>x.toString(16).padStart(2,'0')).join('');
-      return env.ROOM.get(env.ROOM.idFromName(r.id)).fetch('https://do/guestbook'+(u.searchParams.has('cursor')?'?cursor='+encodeURIComponent(u.searchParams.get('cursor')):''), {method:req.method,headers:{'x-client-hash':hash},body});
-    }
     if (u.pathname === '/api/proxy' && req.method === 'GET') return proxy(req, env, u);
     const im = u.pathname.match(/^\/api\/img\/([0-9a-f]{12})$/);
     if (im && req.method === 'GET') {
@@ -133,6 +115,16 @@ export default {
       if (r.code && String(b.code || '') !== r.code) return J({ ok: false, err: '상영 코드가 맞지 않아요' }, 403);
       return J({ ok: true, video: r.video, videos: r.videos && r.videos.length ? r.videos : (r.video ? [r.video] : []), vt: r.vt || [], goods: r.goods || [], photos: r.photos || [] });
     }
+    if (u.pathname === '/api/guest') {
+      let b = {}; if (req.method === 'POST') b = await req.json().catch(() => ({}));
+      const r = (await getRooms(env)).find(x => x.id === String(b.id || u.searchParams.get('id') || '')), k = String(b.k || u.searchParams.get('k') || '');
+      if (!r || (r.code && k !== r.code)) return J({ ok: false }, 404);
+      const st = env.ROOM.get(env.ROOM.idFromName(r.id));
+      const rr = req.method === 'POST'
+        ? await st.fetch('https://do/guest', { method: 'POST', body: JSON.stringify({ n: b.n, t: b.t, c: b.c, ip: req.headers.get('cf-connecting-ip') || '' }) })
+        : await st.fetch('https://do/guest?p=' + encodeURIComponent(u.searchParams.get('p') || '0'));
+      return J(await rr.json(), rr.status);
+    }
     if (u.pathname.startsWith('/api/admin/')) {
       if (!env.ADMIN_PW) return J({ ok: false, err: 'ADMIN_PW 비밀번호가 서버에 설정되지 않았어요' });
       if (req.headers.get('x-admin') !== env.ADMIN_PW) return J({ ok: false, err: '비밀번호가 맞지 않아요' }, 401);
@@ -159,7 +151,6 @@ export default {
         return env.ROOM.get(env.ROOM.idFromName(r.id)).fetch(new Request(u, req));
       }
     }
-    if(env.ASSETS)return env.ASSETS.fetch(req);
     return new Response('cinema ok');
   },
 };
@@ -167,35 +158,12 @@ export default {
 const lk = o => ({ c: Number.isInteger(o && o.c) && o.c >= 0 && o.c < 5 ? o.c : -1, h: Number.isInteger(o && o.h) && o.h >= 0 && o.h < 3 ? o.h : 0 });
 
 export class Room {
-  constructor(state) { this.state=state; this.st = state.storage; this.c = new Map(); this.seats = {}; this.rows = 11; this.cols = 12; this.dirty = new Set(); this.tm = 0; }
+  constructor(state) { this.st = state.storage; this.c = new Map(); this.seats = {}; this.rows = 11; this.cols = 12; this.dirty = new Set(); this.tm = 0; }
   flush() { this.tm = 0; const a = []; for (const q of this.dirty) if (this.c.has(q.ws)) a.push([q.id, q.x, q.z, q.ry, q.sit ? 1 : 0]); this.dirty.clear(); if (a.length) this.bc({ t: 'ps', a }); }
   bc(o, ex) { const s = JSON.stringify(o); for (const [w] of this.c) if (w !== ex) try { w.send(s); } catch {} }
   pub(p) { return { t: 'p', id: p.id, name: p.name, seat: p.seat, x: p.x, z: p.z, ry: p.ry, sit: p.sit, act: p.act || '', look: p.look || null }; }
   async fetch(req) {
     const u = new URL(req.url);
-    if (u.pathname.startsWith('/guestbook')) {
-      return this.state.blockConcurrencyWhile(async()=> {
-        if(u.pathname==='/guestbook/delete') {
-          const b=await req.json().catch(()=>({}));
-          if(!/^gb:[0-9a-f-]+$/.test(b.id||'')) return J({err:'잘못된 글 ID'},400);
-          await this.st.delete(b.id);return J({ok:true});
-        }
-        if(req.method==='GET') {
-          const cursor=u.searchParams.get('cursor')||'';if(cursor&&!/^gb:[0-9a-f-]+$/.test(cursor))return J({err:'잘못된 페이지'},400);
-          const items=await this.st.list({prefix:'gb:',reverse:true,limit:7,...(cursor?{end:cursor}:{})});
-          const entries=[...items].slice(0,6).map(([id,v])=>({id,...v}));
-          return J({ok:true,entries,nextCursor:items.size>6?entries[entries.length-1].id:null});
-        }
-        const b=await req.json().catch(()=>({}));
-        const nick=String(b.nick||'').trim(),message=String(b.message||'').trim();
-        if(!nick||!message||nick.length>20||message.length>500) return J({err:'닉네임 1~20자, 메시지 1~500자로 입력해주세요'},400);
-        const key='rate:'+req.headers.get('x-client-hash'),now=Date.now(),rate=await this.st.get(key);
-        if(rate&&(now-rate.at<30000||(rate.message===message&&now-rate.at<600000))) return J({err:'잠시 후 작성해주세요. 같은 내용은 10분 뒤 작성할 수 있어요'},429);
-        const id='gb:'+String(now).padStart(13,'0')+'-'+crypto.randomUUID();
-        await this.st.put({[id]:{nick,message,at:now},[key]:{at:now,message}});
-        return J({ok:true},201);
-      });
-    }
     if (u.pathname === '/cfg') {
       if (req.method === 'POST') {
         const rooms = await req.json(); await this.st.put('rooms', rooms);
@@ -213,6 +181,20 @@ export class Room {
       if (req.method === 'POST') { await this.st.put('img:' + id, { ct: u.searchParams.get('ct') || 'image/jpeg', b: await req.arrayBuffer() }); await this.st.put('im:' + id, { t: Date.now() }); return Response.json({ ok: true }); }
       const o = await this.st.get('img:' + id);
       return o ? new Response(o.b, { headers: { 'content-type': o.ct } }) : new Response('nf', { status: 404 });
+    }
+    if (u.pathname === '/guest') {
+      let g = (await this.st.get('gb')) || [];
+      if (req.method === 'POST') {
+        const b = await req.json().catch(() => ({})), t = String(b.t || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+        if (!t) return Response.json({ ok: false }, { status: 400 });
+        this.gl = this.gl || {}; if (Object.keys(this.gl).length > 200) this.gl = {};
+        const now = Date.now(); if (now - (this.gl[b.ip] || 0) < 10000) return Response.json({ ok: false, err: 'wait' }, { status: 429 });
+        this.gl[b.ip] = now;
+        g.unshift({ n: String(b.n || '관객').slice(0, 12), t, c: Number.isInteger(b.c) && b.c >= 0 && b.c < 5 ? b.c : 0, ts: now });
+        await this.st.put('gb', g.slice(0, 300)); return Response.json({ ok: true });
+      }
+      const p = Math.max(0, parseInt(u.searchParams.get('p')) || 0);
+      return Response.json({ ok: true, total: g.length, notes: g.slice(p * 10, p * 10 + 10) });
     }
     if (u.pathname === '/count') return Response.json({ n: Object.keys(this.seats).length });
     if (req.headers.get('Upgrade') !== 'websocket') return new Response('ws only', { status: 426 });
