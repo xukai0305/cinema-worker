@@ -13,15 +13,15 @@ function clean(list) {
     const pr = rv.map((x, i) => [String(x || '').trim().slice(0, 500), String(rt[i] || '').slice(0, 40)]).filter(p => p[0]).slice(0, 30);
     const vs = pr.map(p => p[0]), vt = pr.map(p => p[1]);
     const pst = String(l.poster || '');
-    const th0 = ['cinema', 'cafe', 'dvd', 'concert', 'outdoor'].includes(l.theme) ? l.theme : 'cinema';
+    const th0 = ['cinema', 'cafe', 'dvd'].includes(l.theme) ? l.theme : 'cinema';
     const url = x => /^https?:\/\//.test(String(x || '')) ? String(x).slice(0, 500) : '';
     out.push({ id, title: String(l.title || '제목 없음').slice(0, 40), video: vs[0] || '', videos: vs, vt,
-      theme: th0, xb: (Array.isArray(l.xb) ? l.xb : []).map(url).filter(Boolean).slice(0, 2), bigBanner: url(l.bigBanner), roseText: String(l.roseText || '').slice(0, 14),
+      theme: th0, xb: (Array.isArray(l.xb) ? l.xb : []).map(url).filter(Boolean).slice(0, 2), bigBanner: url(l.bigBanner), roseText: String(l.roseText || '').slice(0, 24),
       banner: String(l.banner || '').slice(0, 40), notice: String(l.notice || '').slice(0, 60), waitImg: url(l.waitImg),
-      photos: (Array.isArray(l.photos) ? l.photos : []).map(url).filter(Boolean).slice(0, th0 === 'dvd' ? 6 : 10),
+      photos: (Array.isArray(l.photos) ? l.photos : []).map(url).filter(Boolean).slice(0, th0 === 'dvd' ? 18 : 10),
       goods: (Array.isArray(l.goods) ? l.goods : []).map(g => ({ n: String((g && g.n) || '').slice(0, 30), u: url(g && g.u) })).filter(g => g.u).slice(0, 12),
       durs: Array.isArray(l.durs) && l.durs.length === vs.length ? l.durs.map(x => clamp(x, 0, 86400, 0)) : [], loop: !!l.loop,
-      rows: th0 === 'dvd' ? 1 : th0 === 'cafe' ? clamp(l.rows, 1, 5, 3) : th0 === 'outdoor' ? clamp(l.rows, 1, 8, 4) : th0 === 'concert' ? clamp(l.rows, 1, 12, 8) : clamp(l.rows, 1, 15, 11), cols: th0 === 'dvd' ? clamp(l.cols, 1, 5, 3) : th0 === 'cafe' ? clamp(l.cols, 1, 8, 4) : th0 === 'outdoor' ? clamp(l.cols, 1, 12, 8) : clamp(l.cols, 1, 20, 12),
+      rows: th0 === 'dvd' ? 1 : th0 === 'cafe' ? clamp(l.rows, 1, 5, 3) : clamp(l.rows, 1, 15, 11), cols: th0 === 'dvd' ? 5 : th0 === 'cafe' ? clamp(l.cols, 1, 8, 4) : clamp(l.cols, 1, 20, 12),
       cpType: ['link', 'code'].includes(l.cpType) ? l.cpType : '', cpValue: String(l.cpValue || '').slice(0, 300), cpLabel: String(l.cpLabel || '').slice(0, 30), egg: !!l.egg,
       startAt: Math.max(0, Math.round(+l.startAt) || 0), dur: clamp(l.dur, 0, 86400, 0),
       repeat: [1, 7, -1].includes(+l.repeat) ? +l.repeat : 0,
@@ -33,7 +33,7 @@ function clean(list) {
 let RC = { t: 0, v: null };
 const cfg = env => env.ROOM.get(env.ROOM.idFromName('__cfg'));
 async function getRooms(env) {
-  try { const s = await (await cfg(env).fetch('https://do/cfg')).json(); if (Array.isArray(s)) return s; } catch {}
+  try { const s = await (await cfg(env).fetch('https://do/cfg')).json(); if (Array.isArray(s)) return s.map(r => ['cinema', 'cafe', 'dvd'].includes(r.theme) ? r : { ...r, theme: 'cinema' }); } catch {}
   return DEFAULT.map((r, i) => ({ ...r, id: String(i + 1), rows: r.rows || 11, cols: r.cols || 12, startAt: r.startAt || 0, dur: r.dur || 0, repeat: r.repeat || 0, poster: r.poster || '', code: r.code || '', videos: r.videos || (r.video ? [r.video] : []), durs: r.durs || [], loop: !!r.loop, vt: r.vt || [], theme: r.theme || 'cinema', banner: r.banner || '', notice: r.notice || '', waitImg: r.waitImg || '', photos: r.photos || [], goods: r.goods || [], xb: r.xb || [], bigBanner: r.bigBanner || '', roseText: r.roseText || '' }));
 }
 
