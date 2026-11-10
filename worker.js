@@ -21,7 +21,7 @@ function clean(list) {
       photos: (Array.isArray(l.photos) ? l.photos : []).map(url).filter(Boolean).slice(0, th0 === 'dvd' ? 18 : 10),
       goods: (Array.isArray(l.goods) ? l.goods : []).map(g => ({ n: String((g && g.n) || '').slice(0, 30), u: url(g && g.u) })).filter(g => g.u).slice(0, 12),
       durs: Array.isArray(l.durs) && l.durs.length === vs.length ? l.durs.map(x => clamp(x, 0, 86400, 0)) : [], loop: !!l.loop,
-      rows: th0 === 'birthday_cafe' ? 2 : th0 === 'dvd' ? 1 : th0 === 'cafe' ? clamp(l.rows, 1, 5, 3) : clamp(l.rows, 1, 15, 11), cols: th0 === 'birthday_cafe' ? 4 : th0 === 'dvd' ? 5 : th0 === 'cafe' ? clamp(l.cols, 1, 8, 4) : clamp(l.cols, 1, 20, 12),
+      rows: th0 === 'birthday_cafe' ? 4 : th0 === 'dvd' ? 1 : th0 === 'cafe' ? clamp(l.rows, 1, 5, 3) : clamp(l.rows, 1, 15, 11), cols: th0 === 'birthday_cafe' ? 5 : th0 === 'dvd' ? 5 : th0 === 'cafe' ? clamp(l.cols, 1, 8, 4) : clamp(l.cols, 1, 20, 12),
       cpType: ['link', 'code'].includes(l.cpType) ? l.cpType : '', cpValue: String(l.cpValue || '').slice(0, 300), cpLabel: String(l.cpLabel || '').slice(0, 30), egg: !!l.egg,
       startAt: Math.max(0, Math.round(+l.startAt) || 0), dur: clamp(l.dur, 0, 86400, 0),
       repeat: [1, 7, -1].includes(+l.repeat) ? +l.repeat : 0,
@@ -33,7 +33,7 @@ function clean(list) {
 let RC = { t: 0, v: null };
 const cfg = env => env.ROOM.get(env.ROOM.idFromName('__cfg'));
 async function getRooms(env) {
-  try { const s = await (await cfg(env).fetch('https://do/cfg')).json(); if (Array.isArray(s)) return s.map(r => ['cinema', 'dvd', 'birthday_cafe'].includes(r.theme) ? r : { ...r, theme: 'cinema' }); } catch {}
+  try { const s = await (await cfg(env).fetch('https://do/cfg')).json(); if (Array.isArray(s)) return s.map(r => ['cinema', 'dvd', 'birthday_cafe'].includes(r.theme) ? (r.theme==='birthday_cafe'?{...r,rows:4,cols:5}:r) : { ...r, theme: 'cinema' }); } catch {}
   return DEFAULT.map((r, i) => ({ ...r, id: String(i + 1), rows: r.rows || 11, cols: r.cols || 12, startAt: r.startAt || 0, dur: r.dur || 0, repeat: r.repeat || 0, poster: r.poster || '', code: r.code || '', videos: r.videos || (r.video ? [r.video] : []), durs: r.durs || [], loop: !!r.loop, vt: r.vt || [], theme: r.theme || 'cinema', banner: r.banner || '', notice: r.notice || '', waitImg: r.waitImg || '', photos: r.photos || [], goods: r.goods || [], xb: r.xb || [], bigBanner: r.bigBanner || '', roseText: r.roseText || '' }));
 }
 
@@ -98,7 +98,7 @@ export default {
       if(body && body.length>4096) return J({err:'too large'},413);
       const ip = req.headers.get('CF-Connecting-IP') || 'local';
       const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(r.id+':'+ip)))].map(x=>x.toString(16).padStart(2,'0')).join('');
-      return env.ROOM.get(env.ROOM.idFromName(r.id)).fetch('https://do/guestbook', {method:req.method,headers:{'x-client-hash':hash},body});
+      return env.ROOM.get(env.ROOM.idFromName(r.id)).fetch('https://do/guestbook'+(u.searchParams.has('cursor')?'?cursor='+encodeURIComponent(u.searchParams.get('cursor')):''), {method:req.method,headers:{'x-client-hash':hash},body});
     }
     if (u.pathname === '/api/proxy' && req.method === 'GET') return proxy(req, env, u);
     const im = u.pathname.match(/^\/api\/img\/([0-9a-f]{12})$/);
@@ -181,8 +181,10 @@ export class Room {
           await this.st.delete(b.id);return J({ok:true});
         }
         if(req.method==='GET') {
-          const items=await this.st.list({prefix:'gb:',reverse:true,limit:100});
-          return J({ok:true,entries:[...items].map(([id,v])=>({id,...v})).sort((a,b)=>b.at-a.at)});
+          const cursor=u.searchParams.get('cursor')||'';if(cursor&&!/^gb:[0-9a-f-]+$/.test(cursor))return J({err:'잘못된 페이지'},400);
+          const items=await this.st.list({prefix:'gb:',reverse:true,limit:7,...(cursor?{end:cursor}:{})});
+          const entries=[...items].slice(0,6).map(([id,v])=>({id,...v}));
+          return J({ok:true,entries,nextCursor:items.size>6?entries[entries.length-1].id:null});
         }
         const b=await req.json().catch(()=>({}));
         const nick=String(b.nick||'').trim(),message=String(b.message||'').trim();
