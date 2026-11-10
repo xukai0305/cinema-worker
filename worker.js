@@ -16,12 +16,12 @@ function clean(list) {
     const th0 = ['cinema', 'dvd'].includes(l.theme) ? l.theme : 'cinema';
     const url = x => /^https?:\/\//.test(String(x || '')) ? String(x).slice(0, 500) : '';
     out.push({ id, title: String(l.title || '제목 없음').slice(0, 40), video: vs[0] || '', videos: vs, vt,
-      theme: th0, xb: (Array.isArray(l.xb) ? l.xb : []).map(url).filter(Boolean).slice(0, 2), bigBanner: url(l.bigBanner), roseText: String(l.roseText || '').slice(0, 24),
+      theme: th0, special: !!l.special, hidden: !!l.hidden,
       banner: String(l.banner || '').slice(0, 40), notice: String(l.notice || '').slice(0, 60), waitImg: url(l.waitImg),
       photos: (Array.isArray(l.photos) ? l.photos : []).map(url).filter(Boolean).slice(0, th0 === 'dvd' ? 18 : 10),
       goods: (Array.isArray(l.goods) ? l.goods : []).map(g => ({ n: String((g && g.n) || '').slice(0, 30), u: url(g && g.u) })).filter(g => g.u).slice(0, 12),
       durs: Array.isArray(l.durs) && l.durs.length === vs.length ? l.durs.map(x => clamp(x, 0, 86400, 0)) : [], loop: !!l.loop,
-      rows: th0 === 'dvd' ? 1 : th0 === 'cafe' ? clamp(l.rows, 1, 5, 3) : clamp(l.rows, 1, 15, 11), cols: th0 === 'dvd' ? 5 : th0 === 'cafe' ? clamp(l.cols, 1, 8, 4) : clamp(l.cols, 1, 20, 12),
+      rows: th0 === 'dvd' ? 1 : clamp(l.rows, 1, 15, 11), cols: th0 === 'dvd' ? 5 : clamp(l.cols, 1, 20, 12),
       cpType: ['link', 'code'].includes(l.cpType) ? l.cpType : '', cpValue: String(l.cpValue || '').slice(0, 300), cpLabel: String(l.cpLabel || '').slice(0, 30), egg: !!l.egg,
       startAt: Math.max(0, Math.round(+l.startAt) || 0), dur: clamp(l.dur, 0, 86400, 0),
       repeat: [1, 7, -1].includes(+l.repeat) ? +l.repeat : 0,
@@ -34,7 +34,7 @@ let RC = { t: 0, v: null };
 const cfg = env => env.ROOM.get(env.ROOM.idFromName('__cfg'));
 async function getRooms(env) {
   try { const s = await (await cfg(env).fetch('https://do/cfg')).json(); if (Array.isArray(s)) return s.map(r => ['cinema', 'dvd'].includes(r.theme) ? r : { ...r, theme: 'cinema' }); } catch {}
-  return DEFAULT.map((r, i) => ({ ...r, id: String(i + 1), rows: r.rows || 11, cols: r.cols || 12, startAt: r.startAt || 0, dur: r.dur || 0, repeat: r.repeat || 0, poster: r.poster || '', code: r.code || '', videos: r.videos || (r.video ? [r.video] : []), durs: r.durs || [], loop: !!r.loop, vt: r.vt || [], theme: r.theme || 'cinema', banner: r.banner || '', notice: r.notice || '', waitImg: r.waitImg || '', photos: r.photos || [], goods: r.goods || [], xb: r.xb || [], bigBanner: r.bigBanner || '', roseText: r.roseText || '' }));
+  return DEFAULT.map((r, i) => ({ ...r, id: String(i + 1), rows: r.rows || 11, cols: r.cols || 12, startAt: r.startAt || 0, dur: r.dur || 0, repeat: r.repeat || 0, poster: r.poster || '', code: r.code || '', videos: r.videos || (r.video ? [r.video] : []), durs: r.durs || [], loop: !!r.loop, vt: r.vt || [], theme: r.theme || 'cinema', banner: r.banner || '', notice: r.notice || '', waitImg: r.waitImg || '', photos: r.photos || [], goods: r.goods || [] }));
 }
 
 const sign = async (env, url) => {
@@ -100,28 +100,26 @@ export default {
     }
     if (u.pathname === '/api/rooms') {
       if (RC.v && Date.now() - RC.t < 3000) return new Response(RC.v, { headers: H });
-      const rooms = await Promise.all((await getRooms(env)).map(async (r, i) => {
+      const rooms = (await Promise.all((await getRooms(env)).map(async (r, i) => {
         let n = 0;
         try { n = (await (await env.ROOM.get(env.ROOM.idFromName(r.id)).fetch('https://do/count')).json()).n; } catch {}
         const { code, cpValue, ...pub } = r; pub.hasCp = !!(r.cpType && cpValue);
         return { ...pub, video: code ? '' : r.video, videos: code ? [] : (r.videos && r.videos.length ? r.videos : (r.video ? [r.video] : [])), vt: code ? [] : (r.vt || []), goods: code ? [] : (r.goods || []), photos: code ? [] : (r.photos || []), priv: !!code, hall: i + 1, n };
-      }));
+      }))).filter(r => !r.hidden);
       const body = JSON.stringify({ epoch: EPOCH, rooms }); RC = { t: Date.now(), v: body };
       return new Response(body, { headers: H });
     }
     if (u.pathname === '/api/join' && req.method === 'POST') {
       const b = await req.json().catch(() => ({})), r = (await getRooms(env)).find(x => x.id === b.id);
       if (!r) return J({ ok: false, err: '없는 상영관이에요' }, 404);
+      if (r.hidden) return J({ ok: false, err: '닫힌 상영관이에요' }, 403);
       if (r.code && String(b.code || '') !== r.code) return J({ ok: false, err: '상영 코드가 맞지 않아요' }, 403);
       return J({ ok: true, video: r.video, videos: r.videos && r.videos.length ? r.videos : (r.video ? [r.video] : []), vt: r.vt || [], goods: r.goods || [], photos: r.photos || [] });
     }
     if (u.pathname === '/api/guest') {
-      let b = {}; if (req.method === 'POST') b = await req.json().catch(() => ({}));
-      const r = (await getRooms(env)).find(x => x.id === String(b.id || u.searchParams.get('id') || '')), k = String(b.k || u.searchParams.get('k') || '');
-      if (!r || (r.code && k !== r.code)) return J({ ok: false }, 404);
-      const st = env.ROOM.get(env.ROOM.idFromName(r.id));
+      const st = cfg(env);
       const rr = req.method === 'POST'
-        ? await st.fetch('https://do/guest', { method: 'POST', body: JSON.stringify({ n: b.n, t: b.t, c: b.c, ip: req.headers.get('cf-connecting-ip') || '' }) })
+        ? await st.fetch('https://do/guest', { method: 'POST', body: JSON.stringify({ ...(await req.json().catch(() => ({}))), ip: req.headers.get('cf-connecting-ip') || '' }) })
         : await st.fetch('https://do/guest?p=' + encodeURIComponent(u.searchParams.get('p') || '0'));
       return J(await rr.json(), rr.status);
     }
@@ -145,6 +143,7 @@ export default {
     const m = u.pathname.match(/^\/ws\/(\w+)$/);
     if (m) {
       const r = (await getRooms(env)).find(x => x.id === m[1]);
+      if (r && r.hidden) return new Response('closed', { status: 403 });
       if (r) {
         if (r.code && u.searchParams.get('k') !== r.code) return new Response('forbidden', { status: 403 });
         u.searchParams.set('r', r.rows); u.searchParams.set('c', r.cols);
