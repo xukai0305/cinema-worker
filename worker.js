@@ -81,19 +81,69 @@ async function proxy(req, env, u) {
   return new Response(res.body, { status: res.status, headers: oh });
 }
 
+async function saveMedia(env,origin,b,ct){
+  const id=[...crypto.getRandomValues(new Uint8Array(6))].map(x=>x.toString(16).padStart(2,'0')).join('');
+  const saved=await cfg(env).fetch('https://do/img?id='+id+'&ct='+encodeURIComponent(ct),{method:'POST',body:b});
+  if(!saved.ok)return J({ok:false,err:'파일 저장에 실패했어요'},502);
+  const suffix=ct==='video/mp4'?'.mp4':ct==='image/gif'?'?format=gif':'';
+  return J({ok:true,url:origin+'/api/img/'+id+suffix});
+}
+async function importPoster(req,env,origin){
+  const data=await req.json().catch(()=>null);
+  let source;
+  try{source=new URL(data?.url)}catch{}
+  if(!source||source.origin!=='https://g.us.sinaimg.cn'||source.username||source.password||!/^\/o0\/[a-z0-9]+\.mp4$/i.test(source.pathname))
+    return J({ok:false,err:'웨이보 MP4 포스터 주소를 확인해 주세요'},400);
+  const tooBig=()=>J({ok:false,err:'포스터는 20MB 이하로 올려 주세요'},413);
+  try{
+    const upstream=await fetch(source.href,{redirect:'error',signal:AbortSignal.timeout(20000)});
+    if(!upstream.ok||!upstream.body){await upstream.body?.cancel();return J({ok:false,err:'웨이보 파일을 열 수 없어요. 새 주소를 복사해 주세요.'},422)}
+    if(Number(upstream.headers.get('content-length'))>IMAGE_MAX){await upstream.body.cancel();return tooBig()}
+    const reader=upstream.body.getReader(),chunks=[];
+    let size=0;
+    for(;;){
+      const {value,done}=await reader.read();
+      if(done)break;
+      size+=value.byteLength;
+      if(size>IMAGE_MAX){await reader.cancel();return tooBig()}
+      chunks.push(value);
+    }
+    const bytes=new Uint8Array(size);
+    let offset=0;
+    for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength}
+    if(size<16||new TextDecoder().decode(bytes.subarray(4,8))!=='ftyp')
+      return J({ok:false,err:'웨이보 주소에서 MP4 파일을 받지 못했어요'},422);
+    return await saveMedia(env,origin,bytes,'video/mp4');
+  }catch{return J({ok:false,err:'웨이보 파일을 가져오지 못했어요. 새 주소로 다시 시도해 주세요.'},502)}
+}
+function mediaRange(header,size){
+  if(!header)return {start:0,end:size-1};
+  const m=/^bytes=(\d*)-(\d*)$/.exec(header);
+  if(!m||(!m[1]&&!m[2]))return null;
+  const start=m[1]?Number(m[1]):Math.max(0,size-Number(m[2]));
+  const end=m[1]&&m[2]?Math.min(size-1,Number(m[2])):size-1;
+  if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start>end||start>=size)return null;
+  return {start,end};
+}
+
 export default {
   async fetch(req, env, ctx) {
     const u = new URL(req.url);
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: H });
     if (u.pathname === '/api/proxy' && req.method === 'GET') return proxy(req, env, u);
-    const im = u.pathname.match(/^\/api\/img\/([0-9a-f]{12})$/);
+    const im = u.pathname.match(/^\/api\/img\/([0-9a-f]{12})(\.mp4)?$/);
     if (im && req.method === 'GET') {
-      const ck = caches.default, hit = await ck.match(req);
-      if (hit) return hit;
-      const r = await cfg(env).fetch('https://do/img?id=' + im[1]);
-      if (r.status !== 200) return new Response('not found', { status: 404, headers: H });
-      const res = new Response(r.body, { headers: { 'content-type': r.headers.get('content-type') || 'image/jpeg', 'cache-control': 'public, max-age=31536000, immutable', 'Access-Control-Allow-Origin': '*', 'Cross-Origin-Resource-Policy': 'cross-origin' } });
-      ctx.waitUntil(ck.put(req, res.clone()));
+      const range=im[2]?req.headers.get('range'):null;
+      const ck=caches.default,hit=range?null:await ck.match(req);
+      if(hit)return hit;
+      const r=await cfg(env).fetch('https://do/img?id='+im[1],range?{headers:{range}}:undefined);
+      if(r.status===404)return new Response('not found',{status:404,headers:H});
+      const headers=new Headers(r.headers);
+      headers.set('Access-Control-Allow-Origin','*');
+      headers.set('Cross-Origin-Resource-Policy','cross-origin');
+      if(r.ok)headers.set('cache-control','public, max-age=31536000, immutable');
+      const res=new Response(r.body,{status:r.status,headers});
+      if(r.status===200&&!range)ctx.waitUntil(ck.put(req,res.clone()));
       return res;
     }
     if (u.pathname === '/api/egg' && req.method === 'POST') {
@@ -150,6 +200,7 @@ export default {
         await cfg(env).fetch('https://do/cfg', { method: 'POST', body: JSON.stringify(list) }); RC = { t: 0, v: null };
         return J({ ok: true });
       }
+      if(u.pathname==='/api/admin/poster-import'&&req.method==='POST')return importPoster(req,env,u.origin);
       if (u.pathname === '/api/admin/img' && req.method === 'POST') {
         const ct = (req.headers.get('content-type') || '').split(';')[0];
         if (!/^image\/(jpeg|png|webp|gif)$/.test(ct)) return J({ ok: false, err: '지원하지 않는 이미지 형식이에요' }, 400);
@@ -158,10 +209,7 @@ export default {
         if (b.byteLength > IMAGE_MAX) return J({ ok: false, err: '이미지는 20MB 이하로 올려 주세요' }, 413);
         if (b.byteLength < (ct === 'image/gif' ? 14 : 1) ||
             (ct === 'image/gif' && !/^GIF8[79]a$/.test(new TextDecoder().decode(b.slice(0, 6))))) return J({ ok: false, err: '이미지 파일을 읽을 수 없어요' }, 400);
-        const id = [...crypto.getRandomValues(new Uint8Array(6))].map(x => x.toString(16).padStart(2, '0')).join('');
-        const saved = await cfg(env).fetch('https://do/img?id=' + id + '&ct=' + encodeURIComponent(ct), { method: 'POST', body: b });
-        if (!saved.ok) return J({ ok: false, err: '이미지 저장에 실패했어요' }, 502);
-        return J({ ok: true, url: u.origin + '/api/img/' + id + (ct === 'image/gif' ? '?format=gif' : '') });
+        return saveMedia(env,u.origin,b,ct);
       }
       const dr = id => env.ROOM.get(env.ROOM.idFromName(String(id || '')));
       if (u.pathname === '/api/admin/guest' && req.method === 'POST') {
@@ -233,17 +281,26 @@ export class Room {
       }
       const o=await this.st.get('img:'+id);
       if(!o)return new Response('nf',{status:404});
-      if(!o.parts)return new Response(o.b,{headers:{'content-type':o.ct}});
-      const keys=Array.from({length:o.parts},(_,i)=>chunkKey(id,i));
+      const range=o.ct==='video/mp4'?req.headers.get('range'):null,size=o.parts?o.size:o.b.byteLength;
+      const bounds=mediaRange(range,size),headers=new Headers({'content-type':o.ct});
+      if(o.ct==='video/mp4')headers.set('accept-ranges','bytes');
+      if(!bounds){headers.set('content-range','bytes */'+size);return new Response(null,{status:416,headers})}
+      const {start,end}=bounds,status=range?206:200;
+      headers.set('content-length',String(end-start+1));
+      if(range)headers.set('content-range','bytes '+start+'-'+end+'/'+size);
+      if(!o.parts)return new Response(range?o.b.slice(start,end+1):o.b,{status,headers});
+      const first=Math.floor(start/IMAGE_CHUNK),last=Math.floor(end/IMAGE_CHUNK);
+      const keys=Array.from({length:last-first+1},(_,i)=>chunkKey(id,first+i));
       const pieces=await this.st.get(keys,{noCache:true});
       if(keys.some(key=>!pieces.has(key)))return new Response('nf',{status:404});
       let i=0;
       const stream=new ReadableStream({pull(controller){
-        const key=keys[i++];
-        controller.enqueue(new Uint8Array(pieces.get(key)));pieces.delete(key);
-        if(i===keys.length)controller.close();
+        const key=keys[i],chunk=new Uint8Array(pieces.get(key)),offset=(first+i)*IMAGE_CHUNK;
+        controller.enqueue(chunk.subarray(Math.max(0,start-offset),Math.min(chunk.byteLength,end-offset+1)));
+        pieces.delete(key);
+        if(++i===keys.length)controller.close();
       }});
-      return new Response(stream,{headers:{'content-type':o.ct,'content-length':String(o.size)}});
+      return new Response(stream,{status,headers});
     }
     if (u.pathname === '/guest') {
       let g = (await this.st.get('gb')) || [];
