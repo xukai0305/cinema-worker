@@ -23,6 +23,7 @@ function clean(list) {
       durs: Array.isArray(l.durs) && l.durs.length === vs.length ? l.durs.map(x => clamp(x, 0, 86400, 0)) : [], loop: !!l.loop,
       rows: th0 === 'dvd' ? 1 : clamp(l.rows, 1, 15, 11), cols: th0 === 'dvd' ? 5 : clamp(l.cols, 1, 20, 12),
       cpType: ['link', 'code'].includes(l.cpType) ? l.cpType : '', cpValue: String(l.cpValue || '').slice(0, 300), cpLabel: String(l.cpLabel || '').slice(0, 30), egg: !!l.egg,
+      eggPrizes: (Array.isArray(l.eggPrizes) ? l.eggPrizes : []).map(p => ({ label: String((p && p.label) || '').slice(0, 30) || '쿠폰', type: ['code', 'link', 'none'].includes(p && p.type) ? p.type : 'code', value: String((p && p.value) || '').slice(0, 300), w: clamp(p && p.w, 0, 1000, 0) })).filter(p => p.type === 'none' || p.value).slice(0, 10),
       startAt: Math.max(0, Math.round(+l.startAt) || 0), dur: clamp(l.dur, 0, 86400, 0),
       repeat: [1, 7, -1].includes(+l.repeat) ? +l.repeat : 0,
       poster: /^https?:\/\//.test(pst) ? pst.slice(0, 500) : (/^data:image\/(jpeg|png|webp);base64,[\w+\/=]+$/.test(pst) && pst.length <= 60000 ? pst : ''),
@@ -93,6 +94,13 @@ export default {
       ctx.waitUntil(ck.put(req, res.clone()));
       return res;
     }
+    if (u.pathname === '/api/egg' && req.method === 'POST') {
+      const b = await req.json().catch(() => ({})), r = (await getRooms(env)).find(x => x.id === b.id);
+      if (!r || r.hidden || !r.egg || !(r.eggPrizes || []).length || (r.code && String(b.code || '') !== r.code)) return J({ ok: false, err: '지금은 참여할 수 없어요' }, 404);
+      const cid = String(b.cid || '').slice(0, 64); if (cid.length < 8) return J({ ok: false }, 400);
+      const rr = await env.ROOM.get(env.ROOM.idFromName(r.id)).fetch('https://do/egg', { method: 'POST', body: JSON.stringify({ cid, ip: req.headers.get('cf-connecting-ip') || '', prizes: r.eggPrizes }) });
+      return J(await rr.json(), rr.status);
+    }
     if (u.pathname === '/api/coupon' && req.method === 'POST') {
       const b = await req.json().catch(() => ({})), r = (await getRooms(env)).find(x => x.id === b.id);
       if (!r || (r.code && String(b.code || '') !== r.code) || !r.cpType || !r.cpValue) return J({ ok: false }, 404);
@@ -103,7 +111,7 @@ export default {
       const rooms = (await Promise.all((await getRooms(env)).map(async (r, i) => {
         let n = 0;
         try { n = (await (await env.ROOM.get(env.ROOM.idFromName(r.id)).fetch('https://do/count')).json()).n; } catch {}
-        const { code, cpValue, ...pub } = r; pub.hasCp = !!(r.cpType && cpValue);
+        const { code, cpValue, eggPrizes, ...pub } = r; pub.hasCp = !!(r.cpType && cpValue); pub.eggRand = !!(r.egg && (eggPrizes || []).length);
         return { ...pub, video: code ? '' : r.video, videos: code ? [] : (r.videos && r.videos.length ? r.videos : (r.video ? [r.video] : [])), vt: code ? [] : (r.vt || []), goods: code ? [] : (r.goods || []), endImg: code ? '' : (r.endImg || ''), photos: code ? [] : (r.photos || []), priv: !!code, hall: i + 1, n };
       }))).filter(r => !r.hidden);
       const body = JSON.stringify({ epoch: EPOCH, rooms }); RC = { t: Date.now(), v: body };
@@ -236,7 +244,20 @@ export class Room {
       if (req.method === 'POST') { const b = await req.json().catch(() => ({})); await this.st.put('bw', (Array.isArray(b.words) ? b.words : []).map(x => String(x).trim().slice(0, 20)).filter(Boolean).slice(0, 200)); return Response.json({ ok: true }); }
       return Response.json({ words: (await this.st.get('bw')) || [] });
     }
-    if (u.pathname === '/stat') { const s = (await this.st.get('stat')) || { v: 0, pk: 0, last: 0 }; return Response.json({ ...s, on: Object.keys(this.seats).length }); }
+    if (u.pathname === '/stat') { const s = (await this.st.get('stat')) || { v: 0, pk: 0, last: 0 }; return Response.json({ ...s, on: Object.keys(this.seats).length, egg: (await this.st.get('egc')) || {} }); }
+    if (u.pathname === '/egg' && req.method === 'POST') {
+      const b = await req.json().catch(() => ({})), cid = String(b.cid || ''), prizes = Array.isArray(b.prizes) ? b.prizes : [];
+      if (!cid || !prizes.length) return Response.json({ ok: false }, { status: 400 });
+      const had = await this.st.get('eg:' + cid); if (had) return Response.json({ ok: true, again: true, prize: had });
+      const ip = String(b.ip || ''), ik = 'ei:' + ip, n = ip ? ((await this.st.get(ik)) || 0) : 0;
+      if (n >= 3) return Response.json({ ok: false, err: '이미 참여했어요' }, { status: 429 });
+      const tot = prizes.reduce((q, p) => q + (+p.w || 0), 0); let pick = prizes[prizes.length - 1];
+      if (tot > 0) { let r = Math.random() * tot; for (const p of prizes) { r -= +p.w || 0; if (r < 0) { pick = p; break; } } }
+      const prize = { label: pick.label, type: pick.type, value: pick.value };
+      await this.st.put('eg:' + cid, prize); if (ip) await this.st.put(ik, n + 1);
+      const cnt = (await this.st.get('egc')) || {}; cnt[prize.label] = (cnt[prize.label] || 0) + 1; await this.st.put('egc', cnt);
+      return Response.json({ ok: true, prize });
+    }
     if (u.pathname === '/users') return Response.json({ ok: true, users: [...this.c.values()].filter(q => q.seat).map(q => ({ id: q.id, name: q.name, seat: q.seat })) });
     if (u.pathname === '/kick' && req.method === 'POST') {
       const b = await req.json().catch(() => ({})), q = [...this.c.values()].find(x => x.id === b.pid);
