@@ -1,4 +1,6 @@
 import { ROOMS as DEFAULT } from './rooms.js';
+const IMAGE_MAX=20*1024*1024, IMAGE_CHUNK=1024*1024;
+const chunkKey=(id,i)=>'imgpart:'+id+':'+i;
 const EPOCH = Date.UTC(2026, 0, 1);
 const H = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'content-type,x-admin,range',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'content-type': 'application/json' };
@@ -149,9 +151,13 @@ export default {
         return J({ ok: true });
       }
       if (u.pathname === '/api/admin/img' && req.method === 'POST') {
-        const b = await req.arrayBuffer(), ct = (req.headers.get('content-type') || '').split(';')[0];
-        if (!/^image\/(jpeg|png|webp|gif)$/.test(ct) || b.byteLength > 900000 || b.byteLength < (ct === 'image/gif' ? 14 : 100) ||
-            (ct === 'image/gif' && !/^GIF8[79]a$/.test(new TextDecoder().decode(b.slice(0, 6))))) return J({ ok: false, err: '이미지 형식이나 크기가 올바르지 않아요' }, 400);
+        const ct = (req.headers.get('content-type') || '').split(';')[0];
+        if (!/^image\/(jpeg|png|webp|gif)$/.test(ct)) return J({ ok: false, err: '지원하지 않는 이미지 형식이에요' }, 400);
+        if (Number(req.headers.get('content-length')) > IMAGE_MAX) return J({ ok: false, err: '이미지는 20MB 이하로 올려 주세요' }, 413);
+        const b = await req.arrayBuffer();
+        if (b.byteLength > IMAGE_MAX) return J({ ok: false, err: '이미지는 20MB 이하로 올려 주세요' }, 413);
+        if (b.byteLength < (ct === 'image/gif' ? 14 : 1) ||
+            (ct === 'image/gif' && !/^GIF8[79]a$/.test(new TextDecoder().decode(b.slice(0, 6))))) return J({ ok: false, err: '이미지 파일을 읽을 수 없어요' }, 400);
         const id = [...crypto.getRandomValues(new Uint8Array(6))].map(x => x.toString(16).padStart(2, '0')).join('');
         const saved = await cfg(env).fetch('https://do/img?id=' + id + '&ct=' + encodeURIComponent(ct), { method: 'POST', body: b });
         if (!saved.ok) return J({ ok: false, err: '이미지 저장에 실패했어요' }, 502);
@@ -207,7 +213,7 @@ export class Room {
         const rooms = await req.json(); await this.st.put('rooms', rooms);
         try { // 안 쓰는 이미지 정리 (올린 지 1시간 지난 것만)
           const used = new Set([...JSON.stringify(rooms).matchAll(/\/api\/img\/([0-9a-f]{12})/g)].map(m => m[1])), metas = await this.st.list({ prefix: 'im:' });
-          for (const [k, v] of metas) { const id = k.slice(3); if (!used.has(id) && Date.now() - (v.t || 0) > 3600e3) await this.st.delete(['im:' + id, 'img:' + id]); }
+          for (const [k, v] of metas) { const id = k.slice(3); if (!used.has(id) && Date.now() - (v.t || 0) > 3600e3) await this.st.delete(['im:' + id, 'img:' + id, ...Array.from({length:v.parts||0},(_,i)=>chunkKey(id,i))]); }
         } catch {}
         return Response.json({ ok: true });
       }
@@ -216,9 +222,28 @@ export class Room {
     if (u.pathname === '/img') {
       const id = u.searchParams.get('id') || '';
       if (!/^[0-9a-f]{12}$/.test(id)) return new Response('bad', { status: 400 });
-      if (req.method === 'POST') { await this.st.put('img:' + id, { ct: u.searchParams.get('ct') || 'image/jpeg', b: await req.arrayBuffer() }); await this.st.put('im:' + id, { t: Date.now() }); return Response.json({ ok: true }); }
-      const o = await this.st.get('img:' + id);
-      return o ? new Response(o.b, { headers: { 'content-type': o.ct } }) : new Response('nf', { status: 404 });
+      if (req.method === 'POST') {
+        const b=await req.arrayBuffer(), ct=u.searchParams.get('ct')||'image/jpeg';
+        if(b.byteLength>IMAGE_MAX)return new Response(null,{status:413});
+        const parts=b.byteLength>IMAGE_CHUNK?Math.ceil(b.byteLength/IMAGE_CHUNK):0;
+        const entries={['im:'+id]:{t:Date.now(),parts},['img:'+id]:parts?{ct,parts,size:b.byteLength}:{ct,b}};
+        for(let i=0;i<parts;i++)entries[chunkKey(id,i)]=b.slice(i*IMAGE_CHUNK,(i+1)*IMAGE_CHUNK);
+        await this.st.put(entries,{noCache:true});
+        return Response.json({ok:true});
+      }
+      const o=await this.st.get('img:'+id);
+      if(!o)return new Response('nf',{status:404});
+      if(!o.parts)return new Response(o.b,{headers:{'content-type':o.ct}});
+      const keys=Array.from({length:o.parts},(_,i)=>chunkKey(id,i));
+      const pieces=await this.st.get(keys,{noCache:true});
+      if(keys.some(key=>!pieces.has(key)))return new Response('nf',{status:404});
+      let i=0;
+      const stream=new ReadableStream({pull(controller){
+        const key=keys[i++];
+        controller.enqueue(new Uint8Array(pieces.get(key)));pieces.delete(key);
+        if(i===keys.length)controller.close();
+      }});
+      return new Response(stream,{headers:{'content-type':o.ct,'content-length':String(o.size)}});
     }
     if (u.pathname === '/guest') {
       let g = (await this.st.get('gb')) || [];
