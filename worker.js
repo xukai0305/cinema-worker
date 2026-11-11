@@ -89,20 +89,61 @@ async function saveMedia(env,origin,b,ct){
   return J({ok:true,url:origin+'/api/img/'+id+suffix});
 }
 const isMP4=b=>b.byteLength>=16&&new TextDecoder().decode(b.slice(4,8))==='ftyp';
-async function uploadToImgBB(env,bytes,type){
+async function uploadToImgBB(env,req,type){
   if(!env.IMGBB_API_KEY)return J({ok:false,err:'Cloudflare 워커에 IMGBB_API_KEY를 Secret으로 설정해 주세요'},503);
+  if(!req.body)return J({ok:false,err:'이미지 파일을 읽을 수 없어요'},400);
   const endpoint=new URL('https://api.imgbb.com/1/upload');
-  endpoint.searchParams.set('key',env.IMGBB_API_KEY);
-  const form=new FormData(),ext=type==='image/jpeg'?'jpg':type.split('/')[1];
-  form.append('image',new Blob([bytes],{type}),'poster.'+ext);
+  endpoint.searchParams.set('key',env.IMGBB_API_KEY.trim());
+  const boundary='sosocinema-'+crypto.randomUUID(),ext=type==='image/jpeg'?'jpg':type.split('/')[1];
+  const enc=new TextEncoder();
+  const head=enc.encode('--'+boundary+'\r\nContent-Disposition: form-data; name="image"; filename="poster.'+ext+'"\r\nContent-Type: '+type+'\r\n\r\n');
+  const tail=enc.encode('\r\n--'+boundary+'--\r\n');
+  const gif=type==='image/gif',signature=new Uint8Array(6);
+  let count=0,invalid=0;
+  const multipart=req.body.pipeThrough(new TransformStream({
+    start(controller){controller.enqueue(head)},
+    transform(chunk,controller){
+      if(count+chunk.byteLength>IMGBB_MAX){invalid=413;throw new Error('size')}
+      if(gif&&count<6){
+        signature.set(chunk.subarray(0,6-count),count);
+        if(count+chunk.byteLength>=6&&!/^GIF8[79]a$/.test(new TextDecoder().decode(signature))){
+          invalid=400;throw new Error('signature');
+        }
+      }
+      count+=chunk.byteLength;
+      controller.enqueue(chunk);
+    },
+    flush(controller){
+      if(count<(gif?14:1)){invalid=400;throw new Error('empty')}
+      controller.enqueue(tail);
+    }
+  }));
+  const timeout=AbortSignal.timeout(90000);
+  const length=Number(req.headers.get('content-length'));
+  let body=multipart;
+  if(Number.isSafeInteger(length)&&length>0&&typeof FixedLengthStream!=='undefined'){
+    const fixed=new FixedLengthStream(head.byteLength+length+tail.byteLength);
+    multipart.pipeTo(fixed.writable,{signal:timeout}).catch(()=>{});
+    body=fixed.readable;
+  }
+  const fileError=()=>invalid===413
+    ? J({ok:false,err:'이미지는 32MB 이하로 올려 주세요'},413)
+    : J({ok:false,err:'이미지 파일을 읽을 수 없어요'},400);
   try{
-    const response=await fetch(endpoint.href,{method:'POST',body:form,redirect:'error',signal:AbortSignal.timeout(30000)});
+    const response=await fetch(endpoint.href,{
+      method:'POST',body,headers:{'content-type':'multipart/form-data; boundary='+boundary},
+      redirect:'manual',signal:timeout
+    });
     const data=await response.json().catch(()=>null);
+    if(invalid)return fileError();
     const url=data?.data?.image?.url||data?.data?.url;
     if(!response.ok||!data?.success||typeof url!=='string'||!/^https:\/\/i\.ibb\.co\//i.test(url))
       return J({ok:false,err:'ImgBB에 이미지를 저장하지 못했어요 (HTTP '+response.status+')'},502);
     return J({ok:true,url});
-  }catch{return J({ok:false,err:'ImgBB에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.'},502)}
+  }catch{
+    if(invalid)return fileError();
+    return J({ok:false,err:timeout.aborted?'ImgBB 업로드 응답이 90초 안에 오지 않았어요.':'Cloudflare 워커가 ImgBB로 파일을 전송하는 중 연결이 끊겼어요.'},502);
+  }
 }
 function mediaRange(header,size){
   if(!header)return {start:0,end:size-1};
@@ -194,12 +235,10 @@ export default {
         const mp4=ct==='video/mp4',max=mp4?MP4_MAX:IMGBB_MAX;
         const tooBig=()=>J({ok:false,err:mp4?'MP4는 20MB 이하로 올려 주세요':'이미지는 32MB 이하로 올려 주세요'},413);
         if(Number(req.headers.get('content-length'))>max)return tooBig();
+        if(!mp4)return uploadToImgBB(env,req,ct);
         const b=await req.arrayBuffer();
         if(b.byteLength>max)return tooBig();
-        if (b.byteLength < (ct === 'image/gif' ? 14 : 1) ||
-            (ct === 'image/gif' && !/^GIF8[79]a$/.test(new TextDecoder().decode(b.slice(0, 6))))) return J({ ok: false, err: '이미지 파일을 읽을 수 없어요' }, 400);
-        if(ct==='video/mp4'&&!isMP4(b))return J({ok:false,err:'MP4 파일을 읽을 수 없어요'},400);
-        if(ct!=='video/mp4')return uploadToImgBB(env,b,ct);
+        if(!isMP4(b))return J({ok:false,err:'MP4 파일을 읽을 수 없어요'},400);
         try{return await saveMedia(env,u.origin,b,ct)}
         catch{return J({ok:false,err:'소소시네마 저장소에 파일을 기록하지 못했어요'},502)}
       }
