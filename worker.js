@@ -1,6 +1,7 @@
 import { ROOMS as DEFAULT } from './rooms.js';
 const IMGBB_MAX=32000000, MP4_MAX=20*1024*1024, IMAGE_CHUNK=1024*1024;
 const chunkKey=(id,i)=>'imgpart:'+id+':'+i;
+const bannerSeconds=value=>Number.isInteger(value)&&value>=3&&value<=60?value:9;
 const EPOCH = Date.UTC(2026, 0, 1);
 const H = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'content-type,x-admin,range',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'content-type': 'application/json' };
@@ -35,6 +36,9 @@ function clean(list) {
 }
 let RC = { t: 0, v: null };
 const cfg = env => env.ROOM.get(env.ROOM.idFromName('__cfg'));
+async function getBannerSeconds(env){
+  try{return bannerSeconds(await (await cfg(env).fetch('https://do/banner')).json())}catch{return 9}
+}
 async function getRooms(env) {
   try { const s = await (await cfg(env).fetch('https://do/cfg')).json(); if (Array.isArray(s)) return s.map(r => ['cinema', 'dvd'].includes(r.theme) ? r : { ...r, theme: 'cinema' }); } catch {}
   return DEFAULT.map((r, i) => ({ ...r, id: String(i + 1), rows: r.rows || 11, cols: r.cols || 12, startAt: r.startAt || 0, dur: r.dur || 0, repeat: r.repeat || 0, poster: r.poster || '', code: r.code || '', videos: r.videos || (r.video ? [r.video] : []), durs: r.durs || [], loop: !!r.loop, vt: r.vt || [], theme: r.theme || 'cinema', banner: r.banner || '', notice: r.notice || '', waitImg: r.waitImg || '', photos: r.photos || [], goods: r.goods || [] }));
@@ -195,7 +199,7 @@ export default {
         const { code, cpValue, eggPrizes, ...pub } = r; pub.hasCp = !!(r.cpType && cpValue); pub.eggRand = !!(r.egg && (eggPrizes || []).length);
         return { ...pub, video: code ? '' : r.video, videos: code ? [] : (r.videos && r.videos.length ? r.videos : (r.video ? [r.video] : [])), vt: code ? [] : (r.vt || []), goods: code ? [] : (r.goods || []), endImg: code ? '' : (r.endImg || ''), photos: code ? [] : (r.photos || []), priv: !!code, hall: i + 1, n };
       }))).filter(r => !r.hidden);
-      const body = JSON.stringify({ epoch: EPOCH, rooms }); RC = { t: Date.now(), v: body };
+      const body = JSON.stringify({ epoch: EPOCH, rooms, bannerSeconds:await getBannerSeconds(env) }); RC = { t: Date.now(), v: body };
       return new Response(body, { headers: H });
     }
     if (u.pathname === '/api/join' && req.method === 'POST') {
@@ -223,10 +227,19 @@ export default {
     if (u.pathname.startsWith('/api/admin/')) {
       if (!env.ADMIN_PW) return J({ ok: false, err: 'ADMIN_PW 비밀번호가 서버에 설정되지 않았어요' });
       if (req.headers.get('x-admin') !== env.ADMIN_PW) return J({ ok: false, err: '비밀번호가 맞지 않아요' }, 401);
-      if (u.pathname === '/api/admin/check') return J({ ok: true, rooms: await getRooms(env) });
+      if (u.pathname === '/api/admin/check') {
+        const [rooms,seconds]=await Promise.all([getRooms(env),getBannerSeconds(env)]);
+        return J({ok:true,rooms,bannerSeconds:seconds});
+      }
       if (u.pathname === '/api/admin/rooms' && req.method === 'POST') {
-        const list = clean(await req.json().catch(() => []));
-        await cfg(env).fetch('https://do/cfg', { method: 'POST', body: JSON.stringify(list) }); RC = { t: 0, v: null };
+        const input=await req.json().catch(()=>null);
+        const rooms=Array.isArray(input)?input:input?.rooms;
+        if(!Array.isArray(rooms))return J({ok:false,err:'상영관 목록을 확인해 주세요'},400);
+        const seconds=input?.bannerSeconds;
+        if(seconds!==undefined&&bannerSeconds(seconds)!==seconds)return J({ok:false,err:'배너 간격은 3~60초로 입력해 주세요'},400);
+        const result=await cfg(env).fetch('https://do/cfg',{method:'POST',body:JSON.stringify({rooms:clean(rooms),bannerSeconds:seconds})});
+        if(!result.ok)return J({ok:false,err:'상영관 설정을 저장하지 못했어요'},502);
+        RC={t:0,v:null};
         return J({ ok: true });
       }
       if (u.pathname === '/api/admin/img' && req.method === 'POST') {
@@ -287,9 +300,13 @@ export class Room {
   async bump() { const s = (await this.st.get('stat')) || { v: 0, pk: 0, last: 0 }; s.v++; s.last = Date.now(); s.pk = Math.max(s.pk, Object.keys(this.seats).length); await this.st.put('stat', s); }
   async fetch(req) {
     const u = new URL(req.url);
+    if(u.pathname==='/banner')return Response.json(bannerSeconds(await this.st.get('bannerSeconds')));
     if (u.pathname === '/cfg') {
       if (req.method === 'POST') {
-        const rooms = await req.json(); await this.st.put('rooms', rooms);
+        const input=await req.json(),rooms=Array.isArray(input)?input:input.rooms;
+        const values={rooms};
+        if(input.bannerSeconds!==undefined)values.bannerSeconds=bannerSeconds(input.bannerSeconds);
+        await this.st.put(values);
         try { // 안 쓰는 이미지 정리 (올린 지 1시간 지난 것만)
           const used = new Set([...JSON.stringify(rooms).matchAll(/\/api\/img\/([0-9a-f]{12})/g)].map(m => m[1])), metas = await this.st.list({ prefix: 'im:' });
           for (const [k, v] of metas) { const id = k.slice(3); if (!used.has(id) && Date.now() - (v.t || 0) > 3600e3) await this.st.delete(['im:' + id, 'img:' + id, ...Array.from({length:v.parts||0},(_,i)=>chunkKey(id,i))]); }
