@@ -147,6 +147,23 @@ export default {
         await cfg(env).fetch('https://do/img?id=' + id + '&ct=' + encodeURIComponent(ct), { method: 'POST', body: b });
         return J({ ok: true, url: u.origin + '/api/img/' + id });
       }
+      const dr = id => env.ROOM.get(env.ROOM.idFromName(String(id || '')));
+      if (u.pathname === '/api/admin/guest' && req.method === 'POST') {
+        const b = await req.json().catch(() => ({})), st = cfg(env);
+        if (b.act === 'list') return J(await (await st.fetch('https://do/guest?raw=1')).json());
+        return J(await (await st.fetch('https://do/guest', { method: 'DELETE', body: JSON.stringify(b.act === 'clear' ? { all: true } : { ts: b.ts, t: b.t }) })).json());
+      }
+      if (u.pathname === '/api/admin/words' && req.method === 'POST') {
+        const b = await req.json().catch(() => ({})), st = cfg(env);
+        if (Array.isArray(b.words)) { await st.fetch('https://do/bw', { method: 'POST', body: JSON.stringify({ words: b.words }) }); return J({ ok: true }); }
+        return J({ ok: true, ...(await (await st.fetch('https://do/bw')).json()) });
+      }
+      if (u.pathname === '/api/admin/stats' && req.method === 'POST') {
+        const out = {}; for (const r of await getRooms(env)) { try { out[r.id] = await (await dr(r.id).fetch('https://do/stat')).json(); } catch {} }
+        return J({ ok: true, stats: out });
+      }
+      if (u.pathname === '/api/admin/users' && req.method === 'POST') { const b = await req.json().catch(() => ({})); return J(await (await dr(b.id).fetch('https://do/users')).json()); }
+      if (u.pathname === '/api/admin/kick' && req.method === 'POST') { const b = await req.json().catch(() => ({})); return J(await (await dr(b.id).fetch('https://do/kick', { method: 'POST', body: JSON.stringify({ pid: b.pid }) })).json()); }
     }
     const m = u.pathname.match(/^\/ws\/(\w+)$/);
     if (m) {
@@ -165,10 +182,14 @@ export default {
 const lk = o => ({ c: Number.isInteger(o && o.c) && o.c >= 0 && o.c < 5 ? o.c : -1, h: Number.isInteger(o && o.h) && o.h >= 0 && o.h < 3 ? o.h : 0 });
 
 export class Room {
-  constructor(state) { this.st = state.storage; this.c = new Map(); this.seats = {}; this.rows = 11; this.cols = 12; this.dirty = new Set(); this.tm = 0; }
+  constructor(state, env) { this.env = env; this.st = state.storage; this.c = new Map(); this.seats = {}; this.rows = 11; this.cols = 12; this.dirty = new Set(); this.tm = 0; }
   flush() { this.tm = 0; const a = []; for (const q of this.dirty) if (this.c.has(q.ws)) a.push([q.id, q.x, q.z, q.ry, q.sit ? 1 : 0]); this.dirty.clear(); if (a.length) this.bc({ t: 'ps', a }); }
   bc(o, ex) { const s = JSON.stringify(o); for (const [w] of this.c) if (w !== ex) try { w.send(s); } catch {} }
   pub(p) { return { t: 'p', id: p.id, name: p.name, seat: p.seat, x: p.x, z: p.z, ry: p.ry, sit: p.sit, act: p.act || '', look: p.look || null }; }
+  async words() { if (Date.now() - (this.bwT || 0) > 60000) { this.bwT = Date.now(); try { const r = await this.env.ROOM.get(this.env.ROOM.idFromName('__cfg')).fetch('https://do/bw'); this.bw = (await r.json()).words || []; } catch {} } return this.bw || []; }
+  mask(t) { for (const w of this.bw || []) t = t.replace(new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), x => '*'.repeat(x.length)); return t; }
+  chat(p, raw) { const now = Date.now(); if (now - (p.lc || 0) < 1200) return; p.lc = now; const t = this.mask(String(raw || '').trim().slice(0, 60)); if (t) this.bc({ t: 'chat', id: p.id, m: t }); }
+  async bump() { const s = (await this.st.get('stat')) || { v: 0, pk: 0, last: 0 }; s.v++; s.last = Date.now(); s.pk = Math.max(s.pk, Object.keys(this.seats).length); await this.st.put('stat', s); }
   async fetch(req) {
     const u = new URL(req.url);
     if (u.pathname === '/cfg') {
@@ -198,6 +219,7 @@ export class Room {
         const m = [...g, ...(Array.isArray(a) ? a : [])].filter(x => x && x.t).sort((p, q) => (q.ts || 0) - (p.ts || 0)).slice(0, 300);
         await this.st.put('gb', m); await this.st.put('gbm', 1); return Response.json({ ok: true });
       }
+      if (req.method === 'DELETE') { const b = await req.json().catch(() => ({})); g = b.all ? [] : g.filter(x => !(x.ts === b.ts && x.t === b.t)); await this.st.put('gb', g); return Response.json({ ok: true, total: g.length }); }
       if (req.method === 'POST') {
         const b = await req.json().catch(() => ({})), t = String(b.t || '').replace(/\s+/g, ' ').trim().slice(0, 60);
         if (!t) return Response.json({ ok: false }, { status: 400 });
@@ -210,12 +232,28 @@ export class Room {
       const p = Math.max(0, parseInt(u.searchParams.get('p')) || 0);
       return Response.json({ ok: true, total: g.length, notes: g.slice(p * 10, p * 10 + 10) });
     }
+    if (u.pathname === '/bw') {
+      if (req.method === 'POST') { const b = await req.json().catch(() => ({})); await this.st.put('bw', (Array.isArray(b.words) ? b.words : []).map(x => String(x).trim().slice(0, 20)).filter(Boolean).slice(0, 200)); return Response.json({ ok: true }); }
+      return Response.json({ words: (await this.st.get('bw')) || [] });
+    }
+    if (u.pathname === '/stat') { const s = (await this.st.get('stat')) || { v: 0, pk: 0, last: 0 }; return Response.json({ ...s, on: Object.keys(this.seats).length }); }
+    if (u.pathname === '/users') return Response.json({ ok: true, users: [...this.c.values()].filter(q => q.seat).map(q => ({ id: q.id, name: q.name, seat: q.seat })) });
+    if (u.pathname === '/kick' && req.method === 'POST') {
+      const b = await req.json().catch(() => ({})), q = [...this.c.values()].find(x => x.id === b.pid);
+      if (!q) return Response.json({ ok: false });
+      if (q.ip) { const ban = (await this.st.get('ban')) || {}; for (const k in ban) if (ban[k] < Date.now()) delete ban[k]; ban[q.ip] = Date.now() + 864e5; await this.st.put('ban', ban); }
+      try { q.ws.close(1008, 'kicked'); } catch {}
+      return Response.json({ ok: true });
+    }
     if (u.pathname === '/count') return Response.json({ n: Object.keys(this.seats).length });
     if (req.headers.get('Upgrade') !== 'websocket') return new Response('ws only', { status: 426 });
     if (u.searchParams.get('r')) { this.rows = +u.searchParams.get('r'); this.cols = +u.searchParams.get('c'); }
+    const ip = req.headers.get('cf-connecting-ip') || '';
+    if (ip) { const ban = (await this.st.get('ban')) || {}; if (ban[ip] && ban[ip] > Date.now()) return new Response('banned', { status: 403 }); }
+    this.words();
     const [cl, sv] = Object.values(new WebSocketPair());
     sv.accept();
-    const p = { id: crypto.randomUUID().slice(0, 8), name: '관객', seat: null, x: 0, z: 0, ry: 0, sit: true, ws: sv };
+    const p = { id: crypto.randomUUID().slice(0, 8), name: '관객', seat: null, x: 0, z: 0, ry: 0, sit: true, ws: sv, ip };
     this.c.set(sv, p);
     sv.send(JSON.stringify({ t: 'init', id: p.id, now: Date.now(), seats: this.seats,
       players: [...this.c.values()].filter(q => q.seat && q !== p).map(q => this.pub(q)) }));
@@ -227,13 +265,14 @@ export class Room {
         if (ri < 0 || ri >= this.rows || !Number.isInteger(n) || n < 1 || n > this.cols || (this.seats[s] && this.seats[s] !== p.id))
           return sv.send(JSON.stringify({ t: 'seat_fail' }));
         if (p.seat) delete this.seats[p.seat];
-        p.seat = s; p.sit = true; p.look = lk(m.look); p.name = String(m.name || '관객').slice(0, 20); this.seats[s] = p.id;
+        p.seat = s; p.sit = true; p.look = lk(m.look); p.name = this.mask(String(m.name || '관객').slice(0, 20)); this.seats[s] = p.id;
         sv.send(JSON.stringify({ t: 'seat_ok', seat: s }));
+        if (!p.counted) { p.counted = 1; this.bump(); }
         this.bc({ t: 'seats', seats: this.seats });
         this.bc(this.pub(p), sv);
       } else if (!p.seat) return;
       else if (m.t === 'move') { p.x = +m.x || 0; p.z = +m.z || 0; p.ry = +m.ry || 0; p.sit = !!m.sit; this.dirty.add(p); if (!this.tm) this.tm = setTimeout(() => this.flush(), 120); }
-      else if (m.t === 'chat') this.bc({ t: 'chat', id: p.id, m: String(m.m).slice(0, 60) });
+      else if (m.t === 'chat') this.chat(p, m.m);
       else if (m.t === 'react' && ['🐷', '🧡', '💜', '❤️'].includes(m.e)) this.bc({ t: 'react', id: p.id, e: m.e });
       else if (m.t === 'look') { p.look = lk(m); this.bc(this.pub(p), sv); }
       else if (m.t === 'act') { p.act = ['lo', 'lp', 'pc', 'sq'].includes(m.a) ? m.a : ''; this.bc(this.pub(p), sv); }
