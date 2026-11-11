@@ -89,46 +89,20 @@ async function saveMedia(env,origin,b,ct){
   return J({ok:true,url:origin+'/api/img/'+id+suffix});
 }
 const isMP4=b=>b.byteLength>=16&&new TextDecoder().decode(b.slice(4,8))==='ftyp';
-const isPosterSource=url=>url?.origin==='https://g.us.sinaimg.cn'&&!url.username&&!url.password&&/^\/o0\/[a-z0-9]+\.mp4$/i.test(url.pathname);
-async function importPoster(req,env,origin){
-  const data=await req.json().catch(()=>null);
-  let source;
-  try{source=new URL(data?.url)}catch{}
-  if(!isPosterSource(source))return J({ok:false,err:'웨이보 MP4 포스터 주소를 확인해 주세요'},400);
-  const fallback='브라우저에서 MP4를 저장한 뒤 포스터의 파일 선택으로 올려 주세요.';
-  const tooBig=()=>J({ok:false,err:'포스터는 20MB 이하로 올려 주세요'},413);
-  let bytes;
+async function uploadToImgBB(env,bytes,type){
+  if(!env.IMGBB_API_KEY)return J({ok:false,err:'Cloudflare 워커에 IMGBB_API_KEY를 Secret으로 설정해 주세요'},503);
+  const endpoint=new URL('https://api.imgbb.com/1/upload');
+  endpoint.searchParams.set('key',env.IMGBB_API_KEY);
+  const form=new FormData(),ext=type==='image/jpeg'?'jpg':type.split('/')[1];
+  form.append('image',new Blob([bytes],{type}),'poster.'+ext);
   try{
-    const signal=AbortSignal.timeout(20000);
-    let upstream=await fetch(source.href,{redirect:'manual',signal});
-    for(let i=0;i<2&&[301,302,303,307,308].includes(upstream.status);i++){
-      const location=upstream.headers.get('location');
-      await upstream.body?.cancel();
-      const next=location?new URL(location,source):null;
-      if(!isPosterSource(next))return J({ok:false,err:'웨이보가 다른 주소로 이동시켰어요. '+fallback},422);
-      source=next;upstream=await fetch(source.href,{redirect:'manual',signal});
-    }
-    if(!upstream.ok||!upstream.body){
-      await upstream.body?.cancel();
-      return J({ok:false,err:'웨이보 서버가 가져오기 요청에 HTTP '+upstream.status+'을 반환했어요. '+fallback},422);
-    }
-    if(Number(upstream.headers.get('content-length'))>IMAGE_MAX){await upstream.body.cancel();return tooBig()}
-    const reader=upstream.body.getReader(),chunks=[];
-    let size=0;
-    for(;;){
-      const {value,done}=await reader.read();
-      if(done)break;
-      size+=value.byteLength;
-      if(size>IMAGE_MAX){await reader.cancel();return tooBig()}
-      chunks.push(value);
-    }
-    bytes=new Uint8Array(size);
-    let offset=0;
-    for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength}
-  }catch{return J({ok:false,err:'웨이보 서버에 연결하지 못했어요. '+fallback},502)}
-  if(!isMP4(bytes))return J({ok:false,err:'웨이보 주소가 MP4 파일을 반환하지 않았어요. '+fallback},422);
-  try{return await saveMedia(env,origin,bytes,'video/mp4')}
-  catch{return J({ok:false,err:'웨이보 파일은 받았지만 소소시네마 저장소에 기록하지 못했어요'},502)}
+    const response=await fetch(endpoint.href,{method:'POST',body:form,redirect:'error',signal:AbortSignal.timeout(30000)});
+    const data=await response.json().catch(()=>null);
+    const url=data?.data?.image?.url||data?.data?.url;
+    if(!response.ok||!data?.success||typeof url!=='string'||!/^https:\/\/i\.ibb\.co\//i.test(url))
+      return J({ok:false,err:'ImgBB에 이미지를 저장하지 못했어요 (HTTP '+response.status+')'},502);
+    return J({ok:true,url});
+  }catch{return J({ok:false,err:'ImgBB에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.'},502)}
 }
 function mediaRange(header,size){
   if(!header)return {start:0,end:size-1};
@@ -214,7 +188,6 @@ export default {
         await cfg(env).fetch('https://do/cfg', { method: 'POST', body: JSON.stringify(list) }); RC = { t: 0, v: null };
         return J({ ok: true });
       }
-      if(u.pathname==='/api/admin/poster-import'&&req.method==='POST')return importPoster(req,env,u.origin);
       if (u.pathname === '/api/admin/img' && req.method === 'POST') {
         const ct = (req.headers.get('content-type') || '').split(';')[0];
         if (!/^image\/(jpeg|png|webp|gif)$/.test(ct) && ct!=='video/mp4') return J({ ok: false, err: '지원하지 않는 이미지 형식이에요' }, 400);
@@ -224,6 +197,7 @@ export default {
         if (b.byteLength < (ct === 'image/gif' ? 14 : 1) ||
             (ct === 'image/gif' && !/^GIF8[79]a$/.test(new TextDecoder().decode(b.slice(0, 6))))) return J({ ok: false, err: '이미지 파일을 읽을 수 없어요' }, 400);
         if(ct==='video/mp4'&&!isMP4(b))return J({ok:false,err:'MP4 파일을 읽을 수 없어요'},400);
+        if(ct!=='video/mp4')return uploadToImgBB(env,b,ct);
         try{return await saveMedia(env,u.origin,b,ct)}
         catch{return J({ok:false,err:'소소시네마 저장소에 파일을 기록하지 못했어요'},502)}
       }
