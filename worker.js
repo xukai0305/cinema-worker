@@ -17,7 +17,7 @@ function clean(list) {
     const url = x => /^https?:\/\//.test(String(x || '')) ? String(x).slice(0, 500) : '';
     out.push({ id, title: String(l.title || '제목 없음').slice(0, 40), video: vs[0] || '', videos: vs, vt,
       theme: th0, special: !!l.special, hidden: !!l.hidden,
-      banner: String(l.banner || '').slice(0, 40), notice: String(l.notice || '').slice(0, 60), waitImg: url(l.waitImg),
+      banner: String(l.banner || '').slice(0, 40), notice: String(l.notice || '').slice(0, 60), waitImg: url(l.waitImg), endImg: url(l.endImg),
       photos: (Array.isArray(l.photos) ? l.photos : []).map(url).filter(Boolean).slice(0, th0 === 'dvd' ? 18 : 10),
       goods: (Array.isArray(l.goods) ? l.goods : []).map(g => ({ n: String((g && g.n) || '').slice(0, 30), u: url(g && g.u) })).filter(g => g.u).slice(0, 12),
       durs: Array.isArray(l.durs) && l.durs.length === vs.length ? l.durs.map(x => clamp(x, 0, 86400, 0)) : [], loop: !!l.loop,
@@ -104,7 +104,7 @@ export default {
         let n = 0;
         try { n = (await (await env.ROOM.get(env.ROOM.idFromName(r.id)).fetch('https://do/count')).json()).n; } catch {}
         const { code, cpValue, ...pub } = r; pub.hasCp = !!(r.cpType && cpValue);
-        return { ...pub, video: code ? '' : r.video, videos: code ? [] : (r.videos && r.videos.length ? r.videos : (r.video ? [r.video] : [])), vt: code ? [] : (r.vt || []), goods: code ? [] : (r.goods || []), photos: code ? [] : (r.photos || []), priv: !!code, hall: i + 1, n };
+        return { ...pub, video: code ? '' : r.video, videos: code ? [] : (r.videos && r.videos.length ? r.videos : (r.video ? [r.video] : [])), vt: code ? [] : (r.vt || []), goods: code ? [] : (r.goods || []), endImg: code ? '' : (r.endImg || ''), photos: code ? [] : (r.photos || []), priv: !!code, hall: i + 1, n };
       }))).filter(r => !r.hidden);
       const body = JSON.stringify({ epoch: EPOCH, rooms }); RC = { t: Date.now(), v: body };
       return new Response(body, { headers: H });
@@ -114,7 +114,7 @@ export default {
       if (!r) return J({ ok: false, err: '없는 상영관이에요' }, 404);
       if (r.hidden) return J({ ok: false, err: '닫힌 상영관이에요' }, 403);
       if (r.code && String(b.code || '') !== r.code) return J({ ok: false, err: '상영 코드가 맞지 않아요' }, 403);
-      return J({ ok: true, video: r.video, videos: r.videos && r.videos.length ? r.videos : (r.video ? [r.video] : []), vt: r.vt || [], goods: r.goods || [], photos: r.photos || [] });
+      return J({ ok: true, video: r.video, videos: r.videos && r.videos.length ? r.videos : (r.video ? [r.video] : []), vt: r.vt || [], goods: r.goods || [], photos: r.photos || [], endImg: r.endImg || '' });
     }
     if (u.pathname === '/api/guest') {
       const st = cfg(env);
