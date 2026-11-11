@@ -1,5 +1,5 @@
 import { ROOMS as DEFAULT } from './rooms.js';
-const IMAGE_MAX=20*1024*1024, IMAGE_CHUNK=1024*1024;
+const IMGBB_MAX=32000000, MP4_MAX=20*1024*1024, IMAGE_CHUNK=1024*1024;
 const chunkKey=(id,i)=>'imgpart:'+id+':'+i;
 const EPOCH = Date.UTC(2026, 0, 1);
 const H = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'content-type,x-admin,range',
@@ -191,9 +191,11 @@ export default {
       if (u.pathname === '/api/admin/img' && req.method === 'POST') {
         const ct = (req.headers.get('content-type') || '').split(';')[0];
         if (!/^image\/(jpeg|png|webp|gif)$/.test(ct) && ct!=='video/mp4') return J({ ok: false, err: '지원하지 않는 이미지 형식이에요' }, 400);
-        if (Number(req.headers.get('content-length')) > IMAGE_MAX) return J({ ok: false, err: '이미지는 20MB 이하로 올려 주세요' }, 413);
-        const b = await req.arrayBuffer();
-        if (b.byteLength > IMAGE_MAX) return J({ ok: false, err: '이미지는 20MB 이하로 올려 주세요' }, 413);
+        const mp4=ct==='video/mp4',max=mp4?MP4_MAX:IMGBB_MAX;
+        const tooBig=()=>J({ok:false,err:mp4?'MP4는 20MB 이하로 올려 주세요':'이미지는 32MB 이하로 올려 주세요'},413);
+        if(Number(req.headers.get('content-length'))>max)return tooBig();
+        const b=await req.arrayBuffer();
+        if(b.byteLength>max)return tooBig();
         if (b.byteLength < (ct === 'image/gif' ? 14 : 1) ||
             (ct === 'image/gif' && !/^GIF8[79]a$/.test(new TextDecoder().decode(b.slice(0, 6))))) return J({ ok: false, err: '이미지 파일을 읽을 수 없어요' }, 400);
         if(ct==='video/mp4'&&!isMP4(b))return J({ok:false,err:'MP4 파일을 읽을 수 없어요'},400);
@@ -262,7 +264,7 @@ export class Room {
       if (!/^[0-9a-f]{12}$/.test(id)) return new Response('bad', { status: 400 });
       if (req.method === 'POST') {
         const b=await req.arrayBuffer(), ct=u.searchParams.get('ct')||'image/jpeg';
-        if(b.byteLength>IMAGE_MAX)return new Response(null,{status:413});
+        if(b.byteLength>MP4_MAX)return new Response(null,{status:413});
         const parts=b.byteLength>IMAGE_CHUNK?Math.ceil(b.byteLength/IMAGE_CHUNK):0;
         const entries={['im:'+id]:{t:Date.now(),parts},['img:'+id]:parts?{ct,parts,size:b.byteLength}:{ct,b}};
         for(let i=0;i<parts;i++)entries[chunkKey(id,i)]=b.slice(i*IMAGE_CHUNK,(i+1)*IMAGE_CHUNK);
