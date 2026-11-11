@@ -88,16 +88,30 @@ async function saveMedia(env,origin,b,ct){
   const suffix=ct==='video/mp4'?'.mp4':ct==='image/gif'?'?format=gif':'';
   return J({ok:true,url:origin+'/api/img/'+id+suffix});
 }
+const isMP4=b=>b.byteLength>=16&&new TextDecoder().decode(b.slice(4,8))==='ftyp';
+const isPosterSource=url=>url?.origin==='https://g.us.sinaimg.cn'&&!url.username&&!url.password&&/^\/o0\/[a-z0-9]+\.mp4$/i.test(url.pathname);
 async function importPoster(req,env,origin){
   const data=await req.json().catch(()=>null);
   let source;
   try{source=new URL(data?.url)}catch{}
-  if(!source||source.origin!=='https://g.us.sinaimg.cn'||source.username||source.password||!/^\/o0\/[a-z0-9]+\.mp4$/i.test(source.pathname))
-    return J({ok:false,err:'웨이보 MP4 포스터 주소를 확인해 주세요'},400);
+  if(!isPosterSource(source))return J({ok:false,err:'웨이보 MP4 포스터 주소를 확인해 주세요'},400);
+  const fallback='브라우저에서 MP4를 저장한 뒤 포스터의 파일 선택으로 올려 주세요.';
   const tooBig=()=>J({ok:false,err:'포스터는 20MB 이하로 올려 주세요'},413);
+  let bytes;
   try{
-    const upstream=await fetch(source.href,{redirect:'error',signal:AbortSignal.timeout(20000)});
-    if(!upstream.ok||!upstream.body){await upstream.body?.cancel();return J({ok:false,err:'웨이보 파일을 열 수 없어요. 새 주소를 복사해 주세요.'},422)}
+    const signal=AbortSignal.timeout(20000);
+    let upstream=await fetch(source.href,{redirect:'manual',signal});
+    for(let i=0;i<2&&[301,302,303,307,308].includes(upstream.status);i++){
+      const location=upstream.headers.get('location');
+      await upstream.body?.cancel();
+      const next=location?new URL(location,source):null;
+      if(!isPosterSource(next))return J({ok:false,err:'웨이보가 다른 주소로 이동시켰어요. '+fallback},422);
+      source=next;upstream=await fetch(source.href,{redirect:'manual',signal});
+    }
+    if(!upstream.ok||!upstream.body){
+      await upstream.body?.cancel();
+      return J({ok:false,err:'웨이보 서버가 가져오기 요청에 HTTP '+upstream.status+'을 반환했어요. '+fallback},422);
+    }
     if(Number(upstream.headers.get('content-length'))>IMAGE_MAX){await upstream.body.cancel();return tooBig()}
     const reader=upstream.body.getReader(),chunks=[];
     let size=0;
@@ -108,13 +122,13 @@ async function importPoster(req,env,origin){
       if(size>IMAGE_MAX){await reader.cancel();return tooBig()}
       chunks.push(value);
     }
-    const bytes=new Uint8Array(size);
+    bytes=new Uint8Array(size);
     let offset=0;
     for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength}
-    if(size<16||new TextDecoder().decode(bytes.subarray(4,8))!=='ftyp')
-      return J({ok:false,err:'웨이보 주소에서 MP4 파일을 받지 못했어요'},422);
-    return await saveMedia(env,origin,bytes,'video/mp4');
-  }catch{return J({ok:false,err:'웨이보 파일을 가져오지 못했어요. 새 주소로 다시 시도해 주세요.'},502)}
+  }catch{return J({ok:false,err:'웨이보 서버에 연결하지 못했어요. '+fallback},502)}
+  if(!isMP4(bytes))return J({ok:false,err:'웨이보 주소가 MP4 파일을 반환하지 않았어요. '+fallback},422);
+  try{return await saveMedia(env,origin,bytes,'video/mp4')}
+  catch{return J({ok:false,err:'웨이보 파일은 받았지만 소소시네마 저장소에 기록하지 못했어요'},502)}
 }
 function mediaRange(header,size){
   if(!header)return {start:0,end:size-1};
@@ -203,13 +217,15 @@ export default {
       if(u.pathname==='/api/admin/poster-import'&&req.method==='POST')return importPoster(req,env,u.origin);
       if (u.pathname === '/api/admin/img' && req.method === 'POST') {
         const ct = (req.headers.get('content-type') || '').split(';')[0];
-        if (!/^image\/(jpeg|png|webp|gif)$/.test(ct)) return J({ ok: false, err: '지원하지 않는 이미지 형식이에요' }, 400);
+        if (!/^image\/(jpeg|png|webp|gif)$/.test(ct) && ct!=='video/mp4') return J({ ok: false, err: '지원하지 않는 이미지 형식이에요' }, 400);
         if (Number(req.headers.get('content-length')) > IMAGE_MAX) return J({ ok: false, err: '이미지는 20MB 이하로 올려 주세요' }, 413);
         const b = await req.arrayBuffer();
         if (b.byteLength > IMAGE_MAX) return J({ ok: false, err: '이미지는 20MB 이하로 올려 주세요' }, 413);
         if (b.byteLength < (ct === 'image/gif' ? 14 : 1) ||
             (ct === 'image/gif' && !/^GIF8[79]a$/.test(new TextDecoder().decode(b.slice(0, 6))))) return J({ ok: false, err: '이미지 파일을 읽을 수 없어요' }, 400);
-        return saveMedia(env,u.origin,b,ct);
+        if(ct==='video/mp4'&&!isMP4(b))return J({ok:false,err:'MP4 파일을 읽을 수 없어요'},400);
+        try{return await saveMedia(env,u.origin,b,ct)}
+        catch{return J({ok:false,err:'소소시네마 저장소에 파일을 기록하지 못했어요'},502)}
       }
       const dr = id => env.ROOM.get(env.ROOM.idFromName(String(id || '')));
       if (u.pathname === '/api/admin/guest' && req.method === 'POST') {
