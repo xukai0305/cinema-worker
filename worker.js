@@ -150,10 +150,12 @@ export default {
       }
       if (u.pathname === '/api/admin/img' && req.method === 'POST') {
         const b = await req.arrayBuffer(), ct = (req.headers.get('content-type') || '').split(';')[0];
-        if (!/^image\/(jpeg|png|webp)$/.test(ct) || b.byteLength > 900000 || b.byteLength < 100) return J({ ok: false, err: '이미지 형식이나 크기가 올바르지 않아요' }, 400);
+        if (!/^image\/(jpeg|png|webp|gif)$/.test(ct) || b.byteLength > 900000 || b.byteLength < (ct === 'image/gif' ? 14 : 100) ||
+            (ct === 'image/gif' && !/^GIF8[79]a$/.test(new TextDecoder().decode(b.slice(0, 6))))) return J({ ok: false, err: '이미지 형식이나 크기가 올바르지 않아요' }, 400);
         const id = [...crypto.getRandomValues(new Uint8Array(6))].map(x => x.toString(16).padStart(2, '0')).join('');
-        await cfg(env).fetch('https://do/img?id=' + id + '&ct=' + encodeURIComponent(ct), { method: 'POST', body: b });
-        return J({ ok: true, url: u.origin + '/api/img/' + id });
+        const saved = await cfg(env).fetch('https://do/img?id=' + id + '&ct=' + encodeURIComponent(ct), { method: 'POST', body: b });
+        if (!saved.ok) return J({ ok: false, err: '이미지 저장에 실패했어요' }, 502);
+        return J({ ok: true, url: u.origin + '/api/img/' + id + (ct === 'image/gif' ? '?format=gif' : '') });
       }
       const dr = id => env.ROOM.get(env.ROOM.idFromName(String(id || '')));
       if (u.pathname === '/api/admin/guest' && req.method === 'POST') {
