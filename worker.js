@@ -51,7 +51,12 @@ async function getBanners(env) {
   try { return cleanBanners(await (await cfg(env).fetch('https://do/banners')).json()); } catch { return []; }
 }
 async function getRooms(env) {
-  try { const s = await (await cfg(env).fetch('https://do/cfg')).json(); if (Array.isArray(s)) return s.map(r => ['cinema', 'dvd'].includes(r.theme) ? r : { ...r, theme: 'cinema' }); } catch {}
+  let rooms;
+  try { rooms = await (await cfg(env).fetch('https://do/cfg')).json(); } catch {}
+  return normalizeRooms(rooms);
+}
+function normalizeRooms(rooms) {
+  if (Array.isArray(rooms)) return rooms.map(r => ['cinema', 'dvd'].includes(r.theme) ? r : { ...r, theme: 'cinema' });
   return DEFAULT.map((r, i) => ({ ...r, id: String(i + 1), rows: r.rows || 11, cols: r.cols || 12, startAt: r.startAt || 0, dur: r.dur || 0, repeat: r.repeat || 0, poster: r.poster || '', code: r.code || '', videos: r.videos || (r.video ? [r.video] : []), durs: r.durs || [], loop: !!r.loop, vt: r.vt || [], theme: r.theme || 'cinema', banner: r.banner || '', notice: r.notice || '', waitImg: r.waitImg || '', photos: r.photos || [], goods: r.goods || [] }));
 }
 
@@ -245,8 +250,21 @@ export default {
       if (req.headers.get('x-admin') !== env.ADMIN_PW) { LOCK.set(aip, { n: lk.n + 1, t: now }); return J({ ok: false, err: '비밀번호가 맞지 않아요' }, 401); }
       if (lk.n) LOCK.delete(aip);
       if (u.pathname === '/api/admin/check') {
-        const [rooms,seconds,banners]=await Promise.all([getRooms(env),getBannerSeconds(env),getBanners(env)]);
-        return J({ok:true,rooms,bannerSeconds:seconds,banners});
+        let config;
+        try {
+          const response = await cfg(env).fetch('https://do/admin-config');
+          if (response.ok) config = await response.json();
+        } catch {}
+        if (!config) {
+          const [rooms, seconds, banners] = await Promise.all([getRooms(env), getBannerSeconds(env), getBanners(env)]);
+          return J({ ok: true, rooms, bannerSeconds: seconds, banners });
+        }
+        return J({
+          ok: true,
+          rooms: normalizeRooms(config?.rooms),
+          bannerSeconds: bannerSeconds(config?.bannerSeconds),
+          banners: cleanBanners(config?.banners),
+        });
       }
       if (u.pathname === '/api/admin/rooms' && req.method === 'POST') {
         const input=await req.json().catch(()=>null);
@@ -317,6 +335,10 @@ export class Room {
   async bump() { const s = (await this.st.get('stat')) || { v: 0, pk: 0, last: 0 }; s.v++; s.last = Date.now(); s.pk = Math.max(s.pk, Object.keys(this.seats).length); await this.st.put('stat', s); }
   async fetch(req) {
     const u = new URL(req.url);
+    if (u.pathname === '/admin-config') {
+      const values = await this.st.get(['rooms', 'bannerSeconds', 'banners']);
+      return Response.json(Object.fromEntries(values));
+    }
     if(u.pathname==='/banners')return Response.json((await this.st.get('banners'))||[]);
     if(u.pathname==='/banner')return Response.json(bannerSeconds(await this.st.get('bannerSeconds')));
     if (u.pathname === '/cfg') {
