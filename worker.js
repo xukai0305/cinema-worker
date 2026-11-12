@@ -35,6 +35,7 @@ function clean(list) {
   return out;
 }
 let RC = { t: 0, v: null };
+const LOCK = new Map(); // 관리자 비번 무차별 대입 방지: IP당 5번 틀리면 15분 잠금
 const cfg = env => env.ROOM.get(env.ROOM.idFromName('__cfg'));
 async function getBannerSeconds(env){
   try{return bannerSeconds(await (await cfg(env).fetch('https://do/banner')).json())}catch{return 9}
@@ -226,10 +227,12 @@ export default {
     }
     if (u.pathname.startsWith('/api/admin/')) {
       if (!env.ADMIN_PW) return J({ ok: false, err: 'ADMIN_PW 비밀번호가 서버에 설정되지 않았어요' });
-      const aip = encodeURIComponent(req.headers.get('cf-connecting-ip') || '-'), au = a => cfg(env).fetch('https://do/auth?a=' + a + '&ip=' + aip).then(r => r.json()).catch(() => ({}));
-      if ((await au('chk')).locked) return J({ ok: false, err: '시도 횟수가 많아 15분간 잠겼어요' }, 429);
-      if (req.headers.get('x-admin') !== env.ADMIN_PW) { await au('fail'); return J({ ok: false, err: '비밀번호가 맞지 않아요' }, 401); }
-      if (u.pathname === '/api/admin/check') await au('ok');
+      const aip = req.headers.get('cf-connecting-ip') || '-', now = Date.now();
+      let lk = LOCK.get(aip) || { n: 0, t: 0 };
+      if (now - lk.t > 900e3) lk = { n: 0, t: 0 };
+      if (lk.n >= 5) return J({ ok: false, err: '시도 횟수가 많아 15분간 잠겼어요' }, 429);
+      if (req.headers.get('x-admin') !== env.ADMIN_PW) { LOCK.set(aip, { n: lk.n + 1, t: now }); return J({ ok: false, err: '비밀번호가 맞지 않아요' }, 401); }
+      if (lk.n) LOCK.delete(aip);
       if (u.pathname === '/api/admin/check') {
         const [rooms,seconds]=await Promise.all([getRooms(env),getBannerSeconds(env)]);
         return J({ok:true,rooms,bannerSeconds:seconds});
@@ -304,14 +307,6 @@ export class Room {
   async fetch(req) {
     const u = new URL(req.url);
     if(u.pathname==='/banner')return Response.json(bannerSeconds(await this.st.get('bannerSeconds')));
-    if (u.pathname === '/auth') { // 관리자 비밀번호 무차별 대입 방지: IP당 5번 틀리면 15분 잠금
-      const k = 'lk:' + (u.searchParams.get('ip') || '-'), a = u.searchParams.get('a'), now = Date.now();
-      let s = (await this.st.get(k)) || { n: 0, t: 0 };
-      if (now - s.t > 900e3) s = { n: 0, t: 0 };
-      if (a === 'fail') { s = { n: s.n + 1, t: now }; await this.st.put(k, s); }
-      else if (a === 'ok' && s.n) await this.st.delete(k);
-      return Response.json({ locked: s.n >= 5 });
-    }
     if (u.pathname === '/cfg') {
       if (req.method === 'POST') {
         const input=await req.json(),rooms=Array.isArray(input)?input:input.rooms;
