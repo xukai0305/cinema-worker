@@ -49,7 +49,7 @@ const cleanBanners = list => (Array.isArray(list) ? list : []).slice(0, 30).map(
   if(b?.kind==='manual'){
     const items=(Array.isArray(b.items)?b.items:[]).slice(0,30).map(item=>({img:url(item?.img),link:cleanLink(item?.link)})).filter(item=>item.img);
     const id=/^[a-z0-9-]{1,64}$/i.test(String(b.id||''))?b.id:'';
-    return {kind:'manual',id,items,after:b.after===-1?-1:Math.round(clamp(b.after,0,99,0)/3)*3,on:b.on!==false};
+    return {kind:'manual',id,title:String(b.title||'').trim().slice(0,60),items,after:b.after===-1?-1:Math.round(clamp(b.after,0,99,0)/3)*3,on:b.on!==false};
   }
   const kind = b && b.kind === 'event' ? 'event' : 'wide';
   const link = String((b && b.link) || '').trim().slice(0, 1000);
