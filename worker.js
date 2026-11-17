@@ -42,6 +42,15 @@ async function getBannerSeconds(env){
 }
 const cleanBanners = list => (Array.isArray(list) ? list : []).slice(0, 30).map(b => {
   const url = x => /^https?:\/\//.test(String(x || '')) ? String(x).slice(0, 1000) : '';
+  const cleanLink=x=>{
+    const link=String(x||'').trim().slice(0,1000);
+    return /^\d{1,3}$/.test(link)||/^https?:\/\//.test(link)?link:'';
+  };
+  if(b?.kind==='manual'){
+    const items=(Array.isArray(b.items)?b.items:[]).slice(0,30).map(item=>({img:url(item?.img),link:cleanLink(item?.link)})).filter(item=>item.img);
+    const id=/^[a-z0-9-]{1,64}$/i.test(String(b.id||''))?b.id:'';
+    return {kind:'manual',id,items,after:b.after===-1?-1:Math.round(clamp(b.after,0,99,0)/3)*3,on:b.on!==false};
+  }
   const kind = b && b.kind === 'event' ? 'event' : 'wide';
   const link = String((b && b.link) || '').trim().slice(0, 1000);
   const group=String(b?.group||'');
@@ -51,7 +60,7 @@ const cleanBanners = list => (Array.isArray(list) ? list : []).slice(0, 30).map(
     groupName:String(b?.groupName||'').trim().slice(0,60),groupShow:b?.groupShow===true,
     groupColor:/^#[0-9a-f]{6}$/i.test(b?.groupColor||'')?b.groupColor:'#ffd44d',
     groupSeconds:bannerSeconds(b?.groupSeconds) };
-}).filter(b => b.img);
+}).filter(b => b.kind==='manual'?b.items.length:b.img);
 async function getBanners(env) {
   try { return cleanBanners(await (await cfg(env).fetch('https://do/banners')).json()); } catch { return []; }
 }
